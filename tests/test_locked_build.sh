@@ -593,7 +593,7 @@ kit_home=$(mktmp)
 write_profile "$kit_home" true
 repo=$(mk_src_repo)
 hang_claude=$(mk_native_claude_hangs)
-out=$(timeout 30 env ROUTING_KIT_HOME="$kit_home" \
+out=$(run_with_timeout 30 env ROUTING_KIT_HOME="$kit_home" \
       KIT_CLAUDE_BIN="$hang_claude" \
       KIT_KEYCHAIN_CMD="$keychain_hit" \
       PROVIDER_FOR_FAKE_KEYCHAIN="kimi" \
@@ -622,7 +622,7 @@ esac
 kit_home=$(mktmp)
 write_profile "$kit_home" true
 repo=$(mk_src_repo)
-out=$(timeout 10 env ROUTING_KIT_HOME="$kit_home" \
+out=$(run_with_timeout 10 env ROUTING_KIT_HOME="$kit_home" \
       KIT_CLAUDE_BIN="$claude_link" \
       KIT_KEYCHAIN_CMD="$keychain_hit" \
       PROVIDER_FOR_FAKE_KEYCHAIN="kimi" \

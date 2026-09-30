@@ -165,6 +165,28 @@ _canary_wait_for_file() {
   done
 }
 
+# _canary_wait_for_port PORT — block (bounded, up to ~5s) until something is
+# actually accepting TCP connections on 127.0.0.1:PORT, instead of a fixed
+# `sleep 0.2` guess. A background python3 http.server can take longer than
+# that to start listening on a loaded/slow box (seen in CI, never on a fast
+# local Mac), and the positive control right after this wait connects
+# outside the jail -- if the listener isn't up yet, that curl fails with
+# "Couldn't connect to server" and the whole canary reports a false
+# lockdown failure. curl succeeding here (any HTTP response, any status
+# code) is enough to prove the listener itself is up; the caller's own
+# probe still does the real check.
+_canary_wait_for_port() {
+  local port i
+  port="$1"
+  i=0
+  while [ "$i" -lt 100 ]; do
+    curl -s --max-time 1 -o /dev/null "http://127.0.0.1:$port/" >/dev/null 2>&1 && return 0
+    i=$((i + 1))
+    sleep 0.05
+  done
+  return 1
+}
+
 # _canary_jail PROFILE CMD — runs CMD through sandbox-exec, in $_CANARY_WT,
 # with the same discipline the real job uses: env -i (no host environment,
 # including any credential the invoking shell happens to carry, reaches a
@@ -692,11 +714,14 @@ httpd.serve_forever()
 " >/dev/null 2>&1 &
   alt_pid=$!
   _canary_record_pid "$alt_pid"
-  sleep 0.2
-  _canary_denied "curl another loopback port" \
-    "curl -sS --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$alt_port/" \
-    "curl -sS --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$alt_port/" \
-    "$profile"
+  if _canary_wait_for_port "$alt_port"; then
+    _canary_denied "curl another loopback port" \
+      "curl -sS --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$alt_port/" \
+      "curl -sS --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$alt_port/" \
+      "$profile"
+  else
+    _canary_fail "curl another loopback port" "listener on port $alt_port never came up"
+  fi
   kill "$alt_pid" 2>/dev/null
   wait "$alt_pid" 2>/dev/null
   alt_pid=""
@@ -773,7 +798,7 @@ httpd.serve_forever()
 " >/dev/null 2>&1 &
     gate_pid=$!
     _canary_record_pid "$gate_pid"
-    sleep 0.2
+    _canary_wait_for_port "$port"
   fi
   gate_out=$(_canary_jail "$profile" "curl -s --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$port/")
   gate_code=$?

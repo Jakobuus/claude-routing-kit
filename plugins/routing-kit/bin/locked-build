@@ -181,10 +181,23 @@ key=""
 claude_pid=""
 timer_pid=""
 cleanup() {
+  # This only ever does real work if the script itself is cut short by a
+  # signal (e.g. an outer caller's own timeout, or Ctrl-C) while claude_pid/
+  # timer_pid are still live and inside the `set -m` window below -- the
+  # normal exit path already clears both to "" before it returns, and the
+  # main flow always `wait`s a killed job immediately after killing it. This
+  # trap must follow the same discipline: killing a job under job control
+  # without an immediate matching `wait` is exactly what makes bash print an
+  # asynchronous "Terminated: ..." job-control notice on this script's
+  # stderr, since nothing here ever reaps the pid otherwise.
   if [ -n "$claude_pid" ]; then
     kill -TERM -"$claude_pid" 2>/dev/null || kill "$claude_pid" 2>/dev/null
+    wait "$claude_pid" 2>/dev/null
   fi
-  [ -n "$timer_pid" ] && kill "$timer_pid" 2>/dev/null
+  if [ -n "$timer_pid" ]; then
+    kill "$timer_pid" 2>/dev/null
+    wait "$timer_pid" 2>/dev/null
+  fi
   kill "$gate_pid" 2>/dev/null
   wait "$gate_pid" 2>/dev/null
 }

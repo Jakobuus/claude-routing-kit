@@ -84,3 +84,58 @@ mktmp() {
   echo "$d" >> "$_MKTMP_LIST"
   echo "$d"
 }
+
+# run_with_timeout SECS CMD... — a portable stand-in for GNU coreutils
+# `timeout`, which a stock Mac (this repo's own baseline) does not ship and
+# a clean CI runner does not have either. Runs CMD in the background inside
+# its own process group, waits for it, and if it hasn't finished within
+# SECS, TERMs (then KILLs) the whole group and returns 124 -- the same
+# convention GNU timeout uses. On a normal finish, CMD's own exit code is
+# returned unchanged.
+#
+# Own process group (`set -m` inside a subshell, so this never touches the
+# test script's own group): killing -pgid on timeout reaches CMD and
+# anything it forked, not just CMD's own pid, without reaching back up into
+# the caller or any sibling test process.
+#
+# No `disown` here: a disowned pid can no longer be `wait`-ed for its real
+# exit status (bash returns 0 immediately without actually waiting) --
+# tried that first, and it silently turned every non-zero/timeout result
+# into a false success. Instead, this follows the same discipline
+# plugins/routing-kit/bin/locked-build uses: `wait CMD_PID` once, for the
+# real exit status, and every subsequent `kill` on an already-reaped pid or
+# on the watchdog is immediately followed by its own `wait` with nothing
+# else run in between -- bash only prints an asynchronous "Terminated: ..."
+# job-control notice for a job it killed and never got around to reaping
+# before running some other command.
+run_with_timeout() {
+  local secs flag_dir flag code
+  secs="$1"; shift
+  flag_dir=$(mktmp)
+  flag="$flag_dir/fired"
+  (
+    set -m
+    "$@" &
+    cmd_pid=$!
+    (
+      sleep "$secs"
+      : > "$flag" 2>/dev/null
+      kill -TERM -"$cmd_pid" 2>/dev/null || kill "$cmd_pid" 2>/dev/null
+    ) >/dev/null 2>&1 &
+    timer_pid=$!
+    wait "$cmd_pid" 2>/dev/null
+    code=$?
+    kill -TERM -"$cmd_pid" 2>/dev/null
+    wait "$cmd_pid" 2>/dev/null
+    kill -KILL -"$cmd_pid" 2>/dev/null
+    kill -TERM -"$timer_pid" 2>/dev/null
+    kill -KILL -"$timer_pid" 2>/dev/null
+    wait "$timer_pid" 2>/dev/null
+    exit "$code"
+  )
+  code=$?
+  if [ -e "$flag" ]; then
+    return 124
+  fi
+  return "$code"
+}

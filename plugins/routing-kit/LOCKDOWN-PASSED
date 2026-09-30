@@ -1,0 +1,18 @@
+Lockdown gate passed: 2026-09-29 (macOS 26.5.1, Claude Code 2.1.283 native install).
+
+Canaries (full set, real sandbox-exec): pass=19 fail=0.
+- Denied: reading the real home, ~/.ssh, ~/.claude, the source repo's .git/config and gitignored
+  files, a symlink out of the working tree, the Keychain, Unix sockets (in the home and in the
+  working tree), outbound network by name, by literal IP and over UDP, other loopback ports,
+  writing into the real home, a background grandchild, listing other processes, inherited file
+  descriptors.
+- Allowed, as intended: reading and writing the working tree; reaching the relay's own port.
+- Skipped on this host: IPv6 (no IPv6 route).
+- KNOWN-GAP (accepted risk): a jailed job can read the command lines of the user's other running
+  programs (sysctl KERN_PROCARGS2). No sandbox rule blocks it. Don't have passwords or tokens in
+  other programs' command lines while a Kimi/GLM job runs.
+
+Real start-up check (tests/live/boot-check.sh, fake provider): 6/6. Real Claude booted in the jail,
+wrote the file, left nothing in the shared temp folder and no processes behind.
+
+Not yet done: a run against the real Kimi or GLM service.

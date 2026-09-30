@@ -1,0 +1,85 @@
+#!/bin/bash
+# scripts/privacy-check [PATH] — refuses to let personal data ship in the
+# public repo. Exit 0 clean, 1 on a hit. Prints "file:line: pattern-name",
+# never the matched text. bash 3.2 / /usr/bin/python3 only.
+set -u
+
+target="${1:-.}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+PATTERNS_DIR="$SCRIPT_DIR/../plugins/routing-kit/lib"
+
+/usr/bin/python3 - "$target" "${ROUTING_KIT_PRIVATE_LIST:-$HOME/.config/routing-kit-dev/banned.txt}" "$PATTERNS_DIR" <<'PYEOF'
+import os
+import sys
+
+target = sys.argv[1]
+private_list_path = sys.argv[2]
+patterns_dir = sys.argv[3]
+
+sys.path.insert(0, patterns_dir)
+from secret_patterns import GENERIC, is_allowed  # shared with lib/secret-scan.sh
+
+def load_private_list(path):
+    if not path or not os.path.isfile(path):
+        return []
+    out = []
+    with open(path, "r", errors="ignore") as f:
+        for raw in f:
+            s = raw.strip()
+            if s:
+                out.append(s.lower())
+    return out
+
+# "allow: <exact text>" lines mark text that may appear even though it holds
+# a private term (e.g. the public repo address under the owner's account).
+_private_lines = load_private_list(private_list_path)
+private_allows = [l[len("allow:"):].strip() for l in _private_lines if l.startswith("allow:")]
+private_terms = [l for l in _private_lines if not l.startswith("allow:")]
+
+hits = []
+
+def iter_files(root):
+    if os.path.isfile(root):
+        if os.path.basename(root) != ".git":
+            yield root
+        return
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Skip VCS internals and installed npm packages (git-ignored, never shipped).
+        dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules")]
+        for fn in filenames:
+            if fn == ".git":
+                continue
+            yield os.path.join(dirpath, fn)
+
+for path in iter_files(target):
+    try:
+        with open(path, "r", errors="ignore") as f:
+            for lineno, line in enumerate(f, start=1):
+                # npm copies registry deprecation notices (third-party text, often
+                # with a maintainer's contact) into package-lock.json.
+                npm_notice = (os.path.basename(path) == "package-lock.json"
+                              and line.lstrip().startswith('"deprecated":'))
+                for name, pattern in GENERIC:
+                    if npm_notice and name == "email":
+                        continue
+                    for m in pattern.finditer(line):
+                        if is_allowed(line, m.start(), m.end(), m.group(0)):
+                            continue
+                        hits.append("%s:%d: %s" % (path, lineno, name))
+                if private_terms:
+                    lowered = line.lower()
+                    for allowed in private_allows:
+                        lowered = lowered.replace(allowed, " ")
+                    for term in private_terms:
+                        if term in lowered:
+                            hits.append("%s:%d: private-list" % (path, lineno))
+    except (IsADirectoryError, OSError):
+        continue
+
+if hits:
+    for h in hits:
+        print(h)
+    sys.exit(1)
+
+sys.exit(0)
+PYEOF

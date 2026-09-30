@@ -1,0 +1,284 @@
+#!/bin/bash
+# kit-selftest — one line per check ("ok" or "FAIL: <fix>"), plus a "WARN:"
+# line for every accepted, known gap a canary probe turns up (e.g. the
+# KERN_PROCARGS2 command-line-read gap, see START-HERE.md). Meant to be run
+# by a friend near the end of START-HERE.md, and by CI/tests with fakes.
+#
+# Checks, always run:
+#   - profile valid (kit-profile validate)
+#   - the session-start hook's output contains "## Your routing table"
+#   - kit-quota runs (exits 0)
+#   - the canary set from lib/canaries.sh, in "full" mode, against a fresh
+#     throwaway working tree and Seatbelt profile built the same way
+#     locked-build builds its own (see lib/seatbelt.sh, lib/canaries.sh).
+# Checks, only when the profile has that lane on:
+#   - codex: `codex --version`, then a tiny kit-codex-build in a temp repo
+#     that adds hello.txt
+#   - jules: `jules remote list`
+#   - kimi / glm: a tiny locked-build in a temp repo that adds hello.txt
+#
+# Every lane check is fake-able without touching a real provider or the
+# network: put a fake `codex`/`jules` on PATH ahead of the real one, or
+# point KIT_CLAUDE_BIN / KIT_KEYCHAIN_CMD / KIT_GATE_UPSTREAM at fakes for
+# the kimi/glm check -- the exact same env vars locked-build itself already
+# honors (see bin/locked-build, bin/kit-common). Nothing in this script
+# reaches out further than the tools it calls do.
+#
+# Exit code: 0 if every check passed. Otherwise the worst failure, in the
+# severity order the global exit-code convention implies: 5 (lockdown --
+# the canary check failed, meaning a provider could have been contacted
+# with a leak in place) beats everything else; then 3 (missing key/login);
+# then 4 (provider/API error); then 2 (bad input). A canary failure prints
+# a fix line that tells the friend to leave both locked lanes off.
+#
+# bash 3.2 compatible: no mapfile, no ${x,,}, no associative arrays.
+set -u
+
+BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$BIN_DIR/kit-common"
+kit_require_macos
+
+LIB_DIR="$(cd "$BIN_DIR/../lib" && pwd -P)"
+. "$LIB_DIR/seatbelt.sh"
+. "$LIB_DIR/canaries.sh"
+
+PROFILE_JSON="$KIT_HOME/profile.json"
+
+OVERALL_EXIT=0
+
+# note_fail CODE -- track the worst exit code seen, in the severity order
+# described above (5 > 3 > 4 > 2). Once 5 is recorded nothing can downgrade
+# it; likewise 3 beats 4, and 4 beats 2.
+note_fail() {
+  local code="$1"
+  if [ "$OVERALL_EXIT" = 5 ]; then return; fi
+  if [ "$code" = 5 ]; then OVERALL_EXIT=5; return; fi
+  if [ "$OVERALL_EXIT" = 3 ]; then return; fi
+  if [ "$code" = 3 ]; then OVERALL_EXIT=3; return; fi
+  if [ "$OVERALL_EXIT" = 4 ]; then return; fi
+  if [ "$code" = 4 ]; then OVERALL_EXIT=4; return; fi
+  if [ "$OVERALL_EXIT" = 0 ]; then OVERALL_EXIT="$code"; fi
+}
+
+OK_COUNT=0
+FAIL_COUNT=0
+
+ok() {
+  OK_COUNT=$((OK_COUNT + 1))
+  printf '%s: ok\n' "$1"
+}
+
+bad() {
+  FAIL_COUNT=$((FAIL_COUNT + 1))
+  printf '%s: FAIL: %s\n' "$1" "$2"
+  note_fail "$3"
+}
+
+warn() {
+  printf 'WARN: %s\n' "$1"
+}
+
+# lane_enabled KEY -- true if the profile turns this lane on. A missing or
+# unreadable profile.json means every lane reads as off (the profile check
+# above already reports that failure on its own line).
+lane_enabled() {
+  [ -f "$PROFILE_JSON" ] || return 1
+  case "$1" in
+    codex)
+      v=$(/usr/bin/jq -r '.codex // "none"' "$PROFILE_JSON" 2>/dev/null)
+      [ -n "$v" ] && [ "$v" != "none" ]
+      ;;
+    jules|kimi|glm)
+      v=$(/usr/bin/jq -r --arg k "$1" '.[$k] // false' "$PROFILE_JSON" 2>/dev/null)
+      [ "$v" = "true" ]
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+# mk_selftest_repo [with_gitignore] -- a small committed repo, optionally
+# with a gitignored, untracked file left dirty-free (needed by the canary
+# check's gitignored-file probe). Caller removes the returned dir.
+mk_selftest_repo() {
+  local d
+  d=$(mktemp -d "${TMPDIR:-/tmp}/kit-selftest-repo.XXXXXX") || return 1
+  git -C "$d" init -q || return 1
+  git -C "$d" config user.email you@example.com
+  git -C "$d" config user.name "kit-selftest"
+  echo hello > "$d/a.txt"
+  if [ "${1:-}" = with_gitignore ]; then
+    echo 'ignored.local' > "$d/.gitignore"
+    git -C "$d" add a.txt .gitignore
+    git -C "$d" commit -q -m init
+    echo "secret-local-content" > "$d/ignored.local"
+  else
+    git -C "$d" add a.txt
+    git -C "$d" commit -q -m init
+  fi
+  echo "$d"
+}
+
+mk_selftest_brief() {
+  local d
+  d=$(mktemp -d "${TMPDIR:-/tmp}/kit-selftest-brief.XXXXXX") || return 1
+  printf 'create hello.txt containing hi\n' > "$d/brief.md"
+  echo "$d/brief.md"
+}
+
+# --- profile --------------------------------------------------------------
+if "$BIN_DIR/kit-profile" validate >/dev/null 2>&1; then
+  ok "profile"
+else
+  bad "profile" "profile missing or invalid; run through START-HERE.md, or fix with kit-profile set KEY VALUE" 2
+fi
+
+# --- routing table (session-start hook) ------------------------------------
+HOOK="$BIN_DIR/../hooks/session-start"
+hook_out=$("$HOOK" 2>/dev/null)
+case "$hook_out" in
+  *'## Your routing table'*)
+    ok "routing table"
+    ;;
+  *)
+    bad "routing table" "session-start hook did not print a routing table; run kit-profile validate, then claude plugin update routing-kit@routing-kit" 2
+    ;;
+esac
+
+# --- kit-quota --------------------------------------------------------------
+if quota_out=$("$BIN_DIR/kit-quota" 2>&1); then
+  ok "kit-quota"
+else
+  bad "kit-quota" "could not read usage; run kit-quota --json, then fix the reported profile or file error" 2
+fi
+
+# --- codex ------------------------------------------------------------------
+if lane_enabled codex; then
+  if ! command -v codex >/dev/null 2>&1; then
+    bad "codex" "no codex on PATH: npm i -g @openai/codex (or brew install codex), then codex login" 3
+  elif ! codex --version >/dev/null 2>&1; then
+    bad "codex" "codex --version failed; run codex login" 3
+  else
+    tmp_repo=$(mk_selftest_repo)
+    tmp_brief=$(mk_selftest_brief)
+    if [ -z "$tmp_repo" ] || [ -z "$tmp_brief" ]; then
+      bad "codex" "could not create a temp repo/brief; free disk space and rerun kit-selftest" 2
+    else
+      build_out=$("$BIN_DIR/kit-codex-build" --repo "$tmp_repo" --name kit-selftest-codex --brief "$tmp_brief" 2>&1)
+      build_code=$?
+      if [ "$build_code" -eq 0 ]; then
+        ok "codex"
+      else
+        printf '%s\n' "$build_out"
+        bad "codex" "build check failed (exit $build_code); run codex login if needed, then rerun kit-selftest" "$build_code"
+      fi
+    fi
+    [ -n "$tmp_repo" ] && rm -rf "$tmp_repo"
+    [ -n "$tmp_brief" ] && rm -rf "$(dirname "$tmp_brief")"
+  fi
+fi
+
+# --- jules --------------------------------------------------------------
+if lane_enabled jules; then
+  if ! command -v jules >/dev/null 2>&1; then
+    bad "jules" "no jules on PATH: npm install -g @google/jules && jules login" 3
+  elif jules_out=$(jules remote list 2>&1); then
+    ok "jules"
+  else
+    bad "jules" "jules remote list failed; run jules login ($jules_out)" 3
+  fi
+fi
+
+# --- kimi / glm (locked-build) ---------------------------------------------
+for provider in kimi glm; do
+  if lane_enabled "$provider"; then
+    tmp_repo=$(mk_selftest_repo)
+    tmp_brief=$(mk_selftest_brief)
+    if [ -z "$tmp_repo" ] || [ -z "$tmp_brief" ]; then
+      bad "$provider" "could not create a temp repo/brief; free disk space and rerun kit-selftest" 2
+    else
+      build_out=$("$BIN_DIR/locked-build" --provider "$provider" --repo "$tmp_repo" \
+        --name "kit-selftest-$provider" --brief "$tmp_brief" --timeout 120 2>&1)
+      build_code=$?
+      if [ "$build_code" -eq 0 ]; then
+        ok "$provider"
+      else
+        printf '%s\n' "$build_out"
+        bad "$provider" "build check failed (exit $build_code); check its key and run kit-profile set $provider false until fixed" "$build_code"
+      fi
+    fi
+    [ -n "$tmp_repo" ] && rm -rf "$tmp_repo"
+    [ -n "$tmp_brief" ] && rm -rf "$(dirname "$tmp_brief")"
+  fi
+done
+
+# --- canaries (lib/canaries.sh, full mode) ----------------------------------
+# Built the same way locked-build builds its own canary run (a throwaway wt,
+# a resolved fake-shaped claude_bin, a scratch loopback port, seatbelt_generate
+# then canaries_run) -- see bin/locked-build's Step 6/7 and tests/test_canaries.sh,
+# which this mirrors. The source repo needs a gitignored file for the
+# gitignored-file probe that only "full" mode runs.
+canary_scratch=$(mktemp -d "${TMPDIR:-/tmp}/kit-selftest-canary.XXXXXX")
+canary_src=$(mk_selftest_repo with_gitignore)
+if [ -z "$canary_scratch" ] || [ -z "$canary_src" ]; then
+  bad "canaries" "could not create a temp dir; free disk space and rerun kit-selftest" 2
+else
+  canary_wt="$canary_scratch/wt"
+  canary_home="$canary_scratch/home"
+  canary_cfg="$canary_scratch/cfg"
+  canary_tmp="$canary_scratch/tmp"
+  mkdir -p "$canary_wt" "$canary_home" "$canary_cfg" "$canary_tmp"
+  cp "$canary_src/a.txt" "$canary_wt/a.txt"
+
+  canary_claude_bin="$canary_scratch/fake-claude-bin"
+  printf '#!/bin/bash\necho fake\n' > "$canary_claude_bin"
+  chmod +x "$canary_claude_bin"
+
+  canary_wt=$(kit_realpath "$canary_wt")
+  canary_home=$(kit_realpath "$canary_home")
+  canary_cfg=$(kit_realpath "$canary_cfg")
+  canary_tmp=$(kit_realpath "$canary_tmp")
+  canary_claude_bin="$(kit_realpath "$canary_scratch")/fake-claude-bin"
+
+  canary_port=$(/usr/bin/python3 -c '
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+')
+
+  canary_profile="$canary_scratch/profile.sb"
+  seatbelt_generate "$canary_profile" "$canary_wt" "$canary_home" "$canary_cfg" "$canary_tmp" \
+    "$canary_claude_bin" "${canary_port:-0}"
+  seatbelt_code=$?
+
+  if [ "$seatbelt_code" -ne 0 ] || [ ! -s "$canary_profile" ]; then
+    bad "canaries" "could not generate the Seatbelt profile; keep Kimi and GLM off and rerun kit-selftest" 2
+  else
+    canary_out=$(canaries_run "$canary_profile" "$canary_wt" "$canary_src" "${canary_port:-0}" full)
+    canary_code=$?
+    printf '%s\n' "$canary_out"
+    if [ "$canary_code" -eq 0 ]; then
+      ok "canaries"
+    else
+      bad "canaries" "the Kimi/GLM sandbox did not hold on this Mac; keep Kimi and GLM off (kit-profile set kimi false; kit-profile set glm false) and report it" 5
+    fi
+    # A KNOWN-GAP probe (e.g. reading another process's command line via
+    # KERN_PROCARGS2) is an accepted risk documented in START-HERE.md, not
+    # a failure -- canaries_run itself never counts it against pass/fail.
+    # Surface it here as its own WARN line so it's visible without turning
+    # the "canaries" check line above into a FAIL.
+    printf '%s\n' "$canary_out" | while IFS= read -r line; do
+      case "$line" in
+        'CANARY KNOWN-GAP'*) warn "${line#CANARY }" ;;
+      esac
+    done
+  fi
+fi
+rm -rf "$canary_scratch"
+[ -n "$canary_src" ] && rm -rf "$canary_src"
+
+printf 'SELFTEST SUMMARY ok=%s fail=%s\n' "$OK_COUNT" "$FAIL_COUNT"
+exit "$OVERALL_EXIT"

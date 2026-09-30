@@ -1,0 +1,142 @@
+#!/bin/bash
+# kit-routing-table [--profile FILE] [--models FILE] — prints a markdown
+# routing table built from the friend's profile and rules/models.json.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$SCRIPT_DIR/kit-common"
+kit_require_macos
+
+PROFILE_FILE="$KIT_HOME/profile.json"
+MODELS_FILE="$SCRIPT_DIR/../rules/models.json"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --profile)
+      [ $# -ge 2 ] || kit_die 2 "usage: kit-routing-table [--profile FILE] [--models FILE]"
+      PROFILE_FILE="$2"; shift 2 ;;
+    --models)
+      [ $# -ge 2 ] || kit_die 2 "usage: kit-routing-table [--profile FILE] [--models FILE]"
+      MODELS_FILE="$2"; shift 2 ;;
+    *) kit_die 2 "usage: kit-routing-table [--profile FILE] [--models FILE]" ;;
+  esac
+done
+
+if [ ! -f "$PROFILE_FILE" ]; then
+  kit_die 2 "no profile at $PROFILE_FILE"
+fi
+
+valid=$(/usr/bin/jq -e '
+  (.version == 1) and
+  ((.claude_plan // "") as $c | ["pro","max5","max20","team","api"] | index($c) != null) and
+  ((if .codex == null then "none" else .codex end) as $c |
+    ($c | type) == "string" and (["none","plus","pro","business","api"] | index($c) != null)) and
+  ((.jules // false) | type == "boolean") and
+  ((.kimi // false) | type == "boolean") and
+  ((.glm // false) | type == "boolean") and
+  ((.paseo // false) | type == "boolean")
+' "$PROFILE_FILE" >/dev/null 2>&1; echo $?)
+if [ "$valid" != "0" ]; then
+  kit_die 2 "invalid profile at $PROFILE_FILE"
+fi
+
+codex=$(/usr/bin/jq -r '.codex // "none"' "$PROFILE_FILE")
+jules=$(/usr/bin/jq -r '.jules // false' "$PROFILE_FILE")
+kimi=$(/usr/bin/jq -r '.kimi // false' "$PROFILE_FILE")
+glm=$(/usr/bin/jq -r '.glm // false' "$PROFILE_FILE")
+
+if [ ! -r "$MODELS_FILE" ]; then
+  kit_die 2 "cannot read models file at $MODELS_FILE"
+fi
+
+# jq -e treats a null/false result as failure, so a missing field or an
+# unreadable/malformed models file is caught here instead of silently
+# producing an empty model name.
+read_model() {
+  /usr/bin/jq -e -r "$1" "$MODELS_FILE" 2>/dev/null
+}
+
+codex_strong=$(read_model '.codex.strong') || kit_die 2 "invalid or incomplete models file at $MODELS_FILE"
+codex_build=$(read_model '.codex.build') || kit_die 2 "invalid or incomplete models file at $MODELS_FILE"
+codex_lookup=$(read_model '.codex.lookup') || kit_die 2 "invalid or incomplete models file at $MODELS_FILE"
+claude_strong=$(read_model '.claude.strong') || kit_die 2 "invalid or incomplete models file at $MODELS_FILE"
+claude_build=$(read_model '.claude.build') || kit_die 2 "invalid or incomplete models file at $MODELS_FILE"
+claude_lookup=$(read_model '.claude.lookup') || kit_die 2 "invalid or incomplete models file at $MODELS_FILE"
+
+have_codex="no"
+[ "$codex" != "none" ] && have_codex="yes"
+
+echo "| Work | Use | Notes |"
+echo "|---|---|---|"
+
+# Plans and architecture
+if [ "$have_codex" = "yes" ]; then
+  echo "| Plans and architecture | Claude $claude_strong | big plans also get Codex $codex_strong advice |"
+else
+  echo "| Plans and architecture | Claude $claude_strong | strong models plan, judge and review; they don't write code |"
+fi
+
+# Review
+if [ "$have_codex" = "yes" ]; then
+  echo "| Review | Claude work → Codex $codex_strong; Codex work → Claude $claude_strong | the strong model of a different company than the builder |"
+  echo "| Reviewer models | Claude: $claude_strong · Codex: $codex_strong | use these model IDs for adviser and review calls |"
+else
+  echo "| Review | fresh Claude $claude_strong subagent | no other lane to cross-check against |"
+  echo "| Reviewer model | Claude $claude_strong | use this model ID for adviser and review calls |"
+fi
+
+# Second opinion
+if [ "$have_codex" = "yes" ]; then
+  echo "| Second opinion | Codex $codex_strong; big calls add a fresh Claude $claude_strong subagent | via ask-advisers |"
+else
+  echo "| Second opinion | fresh Claude $claude_strong subagent | via ask-advisers |"
+fi
+
+# Features, bug fixes, tests
+if [ "$have_codex" = "yes" ]; then
+  echo "| Features, bug fixes, tests | Codex $codex_build · Claude $claude_build | |"
+else
+  echo "| Features, bug fixes, tests | Claude $claude_build | |"
+fi
+
+# Bulk mechanical edits
+if [ "$have_codex" = "yes" ]; then
+  echo "| Bulk mechanical edits | Codex $codex_lookup (or a script it writes, run here) · Claude $claude_build | |"
+else
+  echo "| Bulk mechanical edits | Claude $claude_build | |"
+fi
+
+# Read-only lookups
+if [ "$have_codex" = "yes" ]; then
+  echo "| Read-only lookups | Codex $codex_lookup · Claude $claude_lookup | |"
+else
+  echo "| Read-only lookups | Claude $claude_lookup | |"
+fi
+
+# Web research
+if [ "$have_codex" = "yes" ]; then
+  echo "| Web research | Codex $codex_build with -c web_search=\"live\" · Claude $claude_build | |"
+else
+  echo "| Web research | Claude $claude_build | |"
+fi
+
+# Mechanical work with an existing check (Jules)
+if [ "$jules" = "true" ]; then
+  echo "| Mechanical work with an existing check | Jules via kit-jules-build | GitHub repos only; free 15 tasks/day |"
+fi
+
+# Cheap extra builds (Kimi/GLM)
+if [ "$kimi" = "true" ] || [ "$glm" = "true" ]; then
+  use=""
+  if [ "$kimi" = "true" ]; then
+    use="locked-build --provider kimi"
+  fi
+  if [ "$glm" = "true" ]; then
+    if [ -n "$use" ]; then
+      use="$use · locked-build --provider glm"
+    else
+      use="locked-build --provider glm"
+    fi
+  fi
+  echo "| Cheap extra builds | $use | committed code only; never paste private data; never start them as Paseo agents |"
+fi

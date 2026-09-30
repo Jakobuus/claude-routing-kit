@@ -1,0 +1,25 @@
+#!/bin/bash
+# .githooks/pre-push — runs the privacy check and the test suite before
+# anything leaves this machine. Activated with:
+#   git config core.hooksPath .githooks
+set -u
+repo_root="$(cd "$(dirname "$0")/.." && pwd -P)"
+cd "$repo_root" || exit 1
+
+private_list="${ROUTING_KIT_PRIVATE_LIST:-$HOME/.config/routing-kit-dev/banned.txt}"
+if [ ! -f "$private_list" ]; then
+  echo "pre-push: private list missing; refusing to push" >&2
+  exit 1
+fi
+
+./scripts/privacy-check . || {
+  echo "pre-push: privacy-check failed, refusing to push" >&2
+  exit 1
+}
+
+./tests/run || {
+  echo "pre-push: tests/run failed, refusing to push" >&2
+  exit 1
+}
+
+exit 0

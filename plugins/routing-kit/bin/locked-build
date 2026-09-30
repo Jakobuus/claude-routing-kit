@@ -1,0 +1,361 @@
+#!/bin/bash
+# locked-build — run a Kimi/GLM build inside a Seatbelt jail behind the auth
+# relay (lib/gate.py). Never gives the jail the real provider key: the key
+# is read from the Keychain, piped straight to the gate's stdin, and the
+# jail only ever sees a placeholder token plus a loopback URL to the gate.
+#
+# Usage: locked-build --provider kimi|glm --repo R --name N --brief FILE
+#                      [--model M] [--timeout SECS]
+#
+# Exit codes: 0 ok · 2 bad input/dirty repo/unsafe path · 3 missing
+# key/non-native Claude · 4 provider or gate error · 5 lockdown or
+# secret-scan refusal (the provider is never contacted when this happens).
+#
+# bash 3.2 compatible: no mapfile, no ${x,,}, no associative arrays.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$SCRIPT_DIR/kit-common"
+kit_require_macos
+
+LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd -P)"
+RULES_JSON="$(cd "$SCRIPT_DIR/../rules" && pwd -P)/models.json"
+GATE_PY="$LIB_DIR/gate.py"
+
+. "$LIB_DIR/export.sh"
+. "$LIB_DIR/ledger.sh"
+. "$LIB_DIR/secret-scan.sh"
+. "$LIB_DIR/seatbelt.sh"
+. "$LIB_DIR/canaries.sh"
+
+usage() {
+  kit_die 2 "usage: locked-build --provider kimi|glm --repo R --name N --brief FILE [--model M] [--timeout SECS]"
+}
+
+provider=""
+repo=""
+name=""
+brief=""
+model=""
+timeout_secs=300
+
+while [ $# -gt 0 ]; do
+  # [ $# -ge 2 ] before every shift 2: a flag given as the very last
+  # argument (no value after it) used to make `shift 2` a no-op (bash
+  # refuses to shift past $#), leaving $1 unchanged and looping forever.
+  case "$1" in
+    --provider) [ $# -ge 2 ] || usage; provider="$2"; shift 2 ;;
+    --repo) [ $# -ge 2 ] || usage; repo="$2"; shift 2 ;;
+    --name) [ $# -ge 2 ] || usage; name="$2"; shift 2 ;;
+    --brief) [ $# -ge 2 ] || usage; brief="$2"; shift 2 ;;
+    --model) [ $# -ge 2 ] || usage; model="$2"; shift 2 ;;
+    --timeout) [ $# -ge 2 ] || usage; timeout_secs="$2"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+
+case "$provider" in
+  kimi|glm) ;;
+  *) usage ;;
+esac
+[ -n "$repo" ] && [ -n "$name" ] && [ -n "$brief" ] || usage
+[ -f "$brief" ] || kit_die 2 "no such brief file: $brief"
+case "$timeout_secs" in
+  ''|*[!0-9]*|0) kit_die 2 "--timeout must be a positive integer, got: $timeout_secs" ;;
+esac
+
+# --repo, resolved to an absolute path before anything else touches it:
+# canaries_run's source-repo probes (the gitignored file, .git/config) run
+# a jailed command from inside wt, so a relative --repo would resolve
+# against the wrong cwd there -- silently reading something inside wt
+# instead (a false "jail allowed it") or failing with "no such file"
+# (a false lockdown failure), neither of which is what the caller passed.
+repo="$(kit_realpath "$repo")"
+[ -n "$repo" ] || kit_die 2 "no such repo directory"
+
+# --- Step 1: the provider must be on in the profile -------------------------
+PROFILE_JSON="$KIT_HOME/profile.json"
+enabled="false"
+if [ -f "$PROFILE_JSON" ]; then
+  enabled=$(/usr/bin/jq -r --arg p "$provider" '.[$p] // false' "$PROFILE_JSON" 2>/dev/null)
+fi
+if [ "$enabled" != "true" ]; then
+  kit_die 2 "$provider is not enabled: run kit-profile set $provider true"
+fi
+
+# --- Step 2: Claude must be the native install -------------------------------
+claude_cmd="${KIT_CLAUDE_BIN:-}"
+if [ -z "$claude_cmd" ]; then
+  claude_cmd="$(command -v claude 2>/dev/null || true)"
+fi
+[ -n "$claude_cmd" ] || kit_die 3 "claude not found on PATH; install the native app first"
+claude_bin="$(readlink -f "$claude_cmd" 2>/dev/null || true)"
+case "$claude_bin" in
+  */.local/share/claude/versions/*) ;;
+  *)
+    kit_die 3 "not the native Claude install (expected readlink -f \"\$(command -v claude)\" under ~/.local/share/claude/versions/, got: $claude_bin)"
+    ;;
+esac
+
+# --- model + base URL (model names live only in rules/models.json) ----------
+if [ -z "$model" ]; then
+  model=$(/usr/bin/jq -r --arg p "$provider" '.[$p].build // empty' "$RULES_JSON")
+  [ -n "$model" ] || kit_die 2 "no default model for $provider in $RULES_JSON"
+fi
+base_url="${KIT_GATE_UPSTREAM:-}"
+if [ -z "$base_url" ]; then
+  base_url=$(/usr/bin/jq -r --arg p "$provider" '.[$p].base_url // empty' "$RULES_JSON")
+  [ -n "$base_url" ] || kit_die 2 "no base_url for $provider in $RULES_JSON"
+fi
+
+# --- Step 3: export the repo, copy the brief in ------------------------------
+run_dir=$(run_export "$repo" "$name")
+export_code=$?
+[ "$export_code" -eq 0 ] || exit "$export_code"
+wt="$run_dir/wt"
+cp "$brief" "$run_dir/brief.md" || kit_die 2 "could not copy brief into the run dir"
+
+# --- Step 4: secret scan — before the gate exists, before anything is contacted
+if ! secret_scan "$wt" "$run_dir/brief.md"; then
+  kit_die 5 "secret scan found a possible secret in $wt or the brief; provider never contacted"
+fi
+
+# --- Step 5: read the key outside the jail, after the secret scan -----------
+key="$(kit_key "$provider")"
+key_code=$?
+if [ "$key_code" -ne 0 ]; then
+  rm -rf "$run_dir"
+  exit "$key_code"
+fi
+
+run_home="$run_dir/home"
+run_cfg="$run_dir/cfg"
+run_tmp="$run_dir/tmp"
+mkdir -p "$run_home" "$run_cfg" "$run_tmp"
+run_home="$(kit_realpath "$run_home")"
+run_cfg="$(kit_realpath "$run_cfg")"
+run_tmp="$(kit_realpath "$run_tmp")"
+wt="$(kit_realpath "$wt")"
+
+# --- Step 6: profile + Step 7: canaries, against a scratch port -------------
+# The gate's real port is only known once it starts (lib/gate.py always
+# binds an OS-chosen ephemeral port; it has no --port flag to pin one in
+# advance, and that file is out of scope here — see the build report for
+# the gap). Canaries must run before the gate starts and before the
+# provider is ever contacted, so they validate the profile mechanism
+# against a throwaway scratch port instead of the gate's real one: the
+# allow-network-outbound-to-one-port rule seatbelt_generate writes is
+# identical in shape either way, only the number differs, and that number
+# is substituted mechanically once the real gate is up (see below).
+scratch_port=$(/usr/bin/python3 -c '
+import socket
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.bind(("127.0.0.1", 0))
+print(s.getsockname()[1])
+s.close()
+')
+[ -n "$scratch_port" ] || kit_die 4 "could not reserve a scratch port for canaries"
+
+canary_profile="$run_dir/canary-profile.sb"
+seatbelt_generate "$canary_profile" "$wt" "$run_home" "$run_cfg" "$run_tmp" "$claude_bin" "$scratch_port"
+seatbelt_code=$?
+[ "$seatbelt_code" -eq 0 ] || exit "$seatbelt_code"
+
+canary_log="$run_dir/canaries.log"
+canaries_run "$canary_profile" "$wt" "$repo" "$scratch_port" quick > "$canary_log" 2>&1
+canary_code=$?
+cat "$canary_log"
+if [ "$canary_code" -ne 0 ]; then
+  kit_die 5 "canary check failed (see $canary_log); provider never contacted, gate never started"
+fi
+
+# --- Step 8: start the gate now that canaries passed; learn its real port ---
+gate_port_file="$run_dir/gate-port"
+gate_stderr="$run_dir/gate-stderr.log"
+printf '%s\n' "$key" | /usr/bin/python3 "$GATE_PY" \
+  --upstream "$base_url" --port-file "$gate_port_file" \
+  >"$run_dir/gate-stdout.log" 2>"$gate_stderr" &
+gate_pid=$!
+key=""
+
+claude_pid=""
+timer_pid=""
+cleanup() {
+  if [ -n "$claude_pid" ]; then
+    kill -TERM -"$claude_pid" 2>/dev/null || kill "$claude_pid" 2>/dev/null
+  fi
+  [ -n "$timer_pid" ] && kill "$timer_pid" 2>/dev/null
+  kill "$gate_pid" 2>/dev/null
+  wait "$gate_pid" 2>/dev/null
+}
+trap cleanup EXIT
+
+i=0
+while [ ! -s "$gate_port_file" ]; do
+  i=$((i + 1))
+  if [ "$i" -gt 100 ]; then
+    kit_die 4 "gate never started (see $gate_stderr)"
+  fi
+  sleep 0.05
+done
+gate_port=$(cat "$gate_port_file")
+
+# Regenerate the profile with the gate's real port for the actual run.
+profile_sb="$run_dir/profile.sb"
+seatbelt_generate "$profile_sb" "$wt" "$run_home" "$run_cfg" "$run_tmp" "$claude_bin" "$gate_port"
+seatbelt_code=$?
+[ "$seatbelt_code" -eq 0 ] || exit "$seatbelt_code"
+
+# The scratch-port profile above proved the mechanism; this proves the
+# EXACT file Claude is about to run under. Still before Claude ever runs,
+# still exit 5 with no provider contact on failure -- the gate is already
+# up by now, but nothing has asked it to forward anything yet.
+final_canary_log="$run_dir/canaries-final.log"
+canaries_run "$profile_sb" "$wt" "$repo" "$gate_port" quick > "$final_canary_log" 2>&1
+final_canary_code=$?
+cat "$final_canary_log"
+if [ "$final_canary_code" -ne 0 ]; then
+  kit_die 5 "final-profile canary check failed (see $final_canary_log); provider never contacted, build never started"
+fi
+
+# --- Step 9: run the real (jailed) build -------------------------------------
+# ANTHROPIC_DEFAULT_HAIKU_MODEL (formerly ANTHROPIC_SMALL_FAST_MODEL, per
+# `strings` on the real binary): without it Claude's own background/small-
+# model calls default to a Haiku model name, which Kimi/GLM's endpoint has
+# never heard of.
+# CLAUDE_CODE_TMPDIR=$run_tmp: lib/seatbelt.sh's profile deliberately grants
+# no access to the shared /private/tmp/claude-<uid> dir (lockdown fix wave
+# 1, item 2) because that dir is shared with every OTHER Claude session the
+# user runs unjailed on this machine. This variable is what actually
+# relocates Claude's per-uid IPC/lock dir into run_tmp instead -- fix wave 1
+# claimed this was set but the edit never landed (`grep` found it only in
+# this comment); wave 2 adds the real line below.
+jail_env=(
+  "HOME=$run_home"
+  "TMPDIR=$run_tmp"
+  "CLAUDE_CONFIG_DIR=$run_cfg"
+  "ANTHROPIC_BASE_URL=http://127.0.0.1:$gate_port"
+  "ANTHROPIC_AUTH_TOKEN=routing-kit-placeholder"
+  "ANTHROPIC_MODEL=$model"
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL=$model"
+  "CLAUDE_CODE_TMPDIR=$run_tmp"
+  "PATH=/usr/bin:/bin"
+  "DISABLE_TELEMETRY=1"
+  "DISABLE_ERROR_REPORTING=1"
+  "DISABLE_AUTOUPDATER=1"
+)
+
+output_json="$run_dir/claude-output.json"
+claude_stderr="$run_dir/claude-stderr.log"
+
+# set -m: without job control, a background `&` job shares this script's
+# own process group, so a plain `kill "$claude_pid"` on timeout only
+# reaches the top-level sandbox-exec, not any Bash-tool child process
+# Claude spawned inside the jail -- those would survive the kill and could
+# keep writing to wt after the diff is already printed. With -m, this
+# backgrounded subshell gets its own process group (pgid == its pid), so
+# `kill -TERM -"$claude_pid"` (a negative pid) reaches the whole group.
+set -m
+(
+  cd "$wt" || exit 4
+  # Close every fd above stderr this subshell inherited (from locked-build
+  # itself, or from whatever invoked it) before the jail starts -- a
+  # leaked fd bypasses every Seatbelt file rule outright, since Seatbelt
+  # checks opens, not fds a process already holds. Runs inside this
+  # subshell only: it execs into sandbox-exec right after, so nothing here
+  # needs the run's own remaining fds (gate_pid handling, etc. all happen
+  # in the parent shell).
+  kit_close_extra_fds
+  exec sandbox-exec -f "$profile_sb" /usr/bin/env -i "${jail_env[@]}" \
+    "$claude_bin" -p --output-format json --permission-mode acceptEdits \
+    --allowedTools "Read Edit Write Glob Grep Bash" \
+    < "$run_dir/brief.md" > "$output_json" 2> "$claude_stderr"
+) &
+claude_pid=$!
+
+(
+  sleep "$timeout_secs"
+  kill -TERM -"$claude_pid" 2>/dev/null || kill "$claude_pid" 2>/dev/null
+) >/dev/null 2>&1 &
+timer_pid=$!
+
+wait "$claude_pid" 2>/dev/null
+claude_raw_code=$?
+
+# Item 7: `wait` returning only means the top-level sandbox-exec (the
+# group leader) exited -- it says nothing about any Bash-tool child Claude
+# spawned inside the jail (e.g. `sleep 60 &`), which shares the same
+# process group under `set -m` but is not what `wait` was watching. Such a
+# child would otherwise survive both the normal-completion path and the
+# timeout path and could keep writing to wt right up until (or after) the
+# diff below is taken. TERM the whole group, give it a short grace period,
+# then KILL whatever's left -- in both cases, before `git add` ever runs.
+kill -TERM -"$claude_pid" 2>/dev/null
+sleep 0.3
+kill -KILL -"$claude_pid" 2>/dev/null
+
+# The timer's own `sleep "$timeout_secs"` is a distinct child process
+# inside the timer subshell's group (same pgid, no separate setpgid), so
+# killing the group reaches it too; TERM then KILL, same discipline as
+# above, so a timer that's mid-sleep can't outlive this script either.
+kill -TERM -"$timer_pid" 2>/dev/null
+kill -KILL -"$timer_pid" 2>/dev/null
+wait "$timer_pid" 2>/dev/null
+claude_pid=""
+timer_pid=""
+set +m
+
+# Map to the plan's exit codes: any non-zero Claude exit (a timeout kill,
+# an API/provider error, a crash) becomes 4. Only a clean 0 passes through
+# as 0 -- locked-build owns 2/3/4/5, not whatever Claude's own CLI happens
+# to return (a real API error was observed to give 1 in Step 5 testing,
+# and a SIGTERM timeout kill gives 143; neither is in the plan's list).
+if [ "$claude_raw_code" -eq 0 ]; then
+  claude_code=0
+else
+  claude_code=4
+fi
+
+# --- Step 10: the diff, and the run dir --------------------------------------
+# kit_git, not plain git: wt/.git is jailed-writable-denied for everything
+# except the working files (lib/seatbelt.sh), but a build could still have
+# planted a smudge/clean filter or diff textconv in .git/config *before*
+# that deny rule existed for it, or the deny could have a gap -- kit_git's
+# isolated config (no system/global gitconfig, no hooks, no fsmonitor)
+# means even a config entry that did get through can't run anything here.
+#
+# `git diff HEAD` alone never shows brand-new files -- only tracked changes
+# relative to HEAD -- so a file the build created but never `git add`ed
+# itself would silently vanish from the printed diff. Stage everything in
+# this throwaway clone first (safe: wt is never pushed anywhere back).
+run_stage_and_diff "$wt" || exit 4
+echo "run dir: $run_dir"
+
+# --- Step 11: the ledger line -------------------------------------------------
+# input_tokens alone under-counts badly once prompt caching is involved:
+# cache_read/cache_creation tokens are real input tokens too, just billed
+# (and reported) separately.
+in_tokens="-"
+out_tokens="-"
+if [ -f "$output_json" ]; then
+  # item 9: when Claude's output has no "usage" object at all, this must
+  # write "-", not "0" -- the prior form's `// 0` on each subfield could
+  # never tell "usage is entirely missing" apart from "usage.input_tokens
+  # happens to be 0", so a response with no usage silently became "0"
+  # (a real number of tokens billed) instead of "-" (unknown).
+  in_tokens=$(/usr/bin/jq -r '
+    if .usage == null or ([.usage.input_tokens, .usage.cache_read_input_tokens, .usage.cache_creation_input_tokens] | all(. == null)) then "-"
+    else
+      ((.usage.input_tokens // 0) + (.usage.cache_read_input_tokens // 0) + (.usage.cache_creation_input_tokens // 0)) as $n
+      | if ($n | type) == "number" then ($n | tostring) else "-" end
+    end
+  ' "$output_json" 2>/dev/null)
+  out_tokens=$(/usr/bin/jq -r '.usage.output_tokens // "-"' "$output_json" 2>/dev/null)
+  [ -n "$in_tokens" ] || in_tokens="-"
+  [ -n "$out_tokens" ] || out_tokens="-"
+fi
+cost_usd=$(ledger_model_cost "$RULES_JSON" "$model" "$in_tokens" "$out_tokens")
+ledger_append "locked-build" "$model" "$name" "$in_tokens" "$out_tokens" "$claude_code" "$provider" "$cost_usd"
+
+# --- Step 12: stop the gate (also runs via the EXIT trap) --------------------
+exit "$claude_code"

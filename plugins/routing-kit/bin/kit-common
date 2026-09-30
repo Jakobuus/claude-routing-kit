@@ -1,0 +1,114 @@
+#!/bin/bash
+# kit-common — sourced helpers for every routing-kit script.
+# bash 3.2 compatible: no mapfile, no ${x,,}, no associative arrays.
+
+kit_require_macos() {
+  case "$(uname)" in
+    Darwin) ;;
+    *)
+      echo "routing-kit is macOS-only" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# kit_die CODE MSG — print MSG to stderr and exit CODE.
+kit_die() {
+  code="$1"; shift
+  echo "$*" >&2
+  exit "$code"
+}
+
+KIT_HOME="${ROUTING_KIT_HOME:-$HOME/.config/routing-kit}"
+
+# Claude Code can keep its settings and plugins outside the default folder.
+kit_claude_dir() {
+  printf '%s\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+}
+
+# kit_close_extra_fds — closes every open file descriptor above stderr (2)
+# in the CURRENT shell. bash 3.2 safe: no `compgen -f /dev/fd`, just a glob
+# over /dev/fd/* (present on stock macOS) filtered to numeric names > 2.
+# A leaked fd bypasses every Seatbelt file-read/file-write rule outright --
+# Seatbelt checks opens, not fds a process already holds -- so this must
+# run in the same shell that is about to `exec sandbox-exec ...`, not in a
+# child of it (closing fds in a child closes only the child's copies).
+# Looping only over a fixed list like "3 4 5 6 7 8 9" (the previous
+# canaries.sh behavior) misses anything opened at a higher number, e.g. by
+# a caller further up the call chain.
+kit_close_extra_fds() {
+  local fdpath fd
+  for fdpath in /dev/fd/*; do
+    fd="${fdpath##*/}"
+    case "$fd" in
+      0|1|2) continue ;;
+      *[!0-9]*) continue ;;
+    esac
+    eval "exec $fd>&-" 2>/dev/null
+  done
+}
+
+# kit_realpath DIR — resolved absolute path (cd "$p" && pwd -P).
+kit_realpath() {
+  ( cd "$1" 2>/dev/null && pwd -P )
+}
+
+# kit_key PROVIDER — read the provider's key from the Keychain.
+# service name: routing-kit-<provider>. Exit 3 with a plain message when
+# missing. Overridable by KIT_KEYCHAIN_CMD for tests.
+kit_key() {
+  local provider service out code
+  provider="$1"
+  service="routing-kit-$provider"
+  if [ -n "${KIT_KEYCHAIN_CMD:-}" ]; then
+    out=$($KIT_KEYCHAIN_CMD -s "$service" -w 2>/dev/null)
+    code=$?
+  else
+    out=$(security find-generic-password -s "$service" -w 2>/dev/null)
+    code=$?
+  fi
+  if [ $code -ne 0 ] || [ -z "$out" ]; then
+    kit_die 3 "no key for $provider: run security add-generic-password -s $service -a \"\$USER\" -w"
+  fi
+  echo "$out"
+}
+
+# kit_git ARGS... — git with host config, hooks AND the caller's environment
+# isolated: no system or global gitconfig, no hooks, no fsmonitor, and no
+# inherited environment at all beyond a minimal PATH and a throwaway HOME.
+# Used for every git call this kit makes against a jailed working tree or a
+# repo it clones, so a `.git/config` or `.gitattributes` a jailed build
+# could write (core.fsmonitor, a clean/smudge filter, a diff textconv)
+# never gets to execute anything outside the jail when the kit itself later
+# runs `git status`/`add`/`diff` on that tree.
+#
+# `env GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git ...` (the prior
+# form) only ever set two variables on top of the caller's full inherited
+# environment -- it never cleared anything. Any `GIT_CONFIG_COUNT` /
+# `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*` / `GIT_CONFIG_PARAMETERS`
+# already in the environment (e.g. a smudge/clean filter set that way,
+# confirmed to survive clone and the post-run add/diff) still reached git
+# untouched, and so did `GIT_DIR` / `GIT_WORK_TREE` / `GIT_EXEC_PATH` /
+# `GIT_ATTR_SOURCE`. `env -i` with only what git needs closes all of those
+# at once. HOME is a throwaway per-call directory (never the real $HOME,
+# never a jailed run's $run_home) so git has nowhere to find a stray
+# ~/.gitconfig either, even though GIT_CONFIG_GLOBAL=/dev/null already
+# covers that path specifically. Removed again once this one git command
+# returns -- a prior form cached one such directory for the whole process
+# (created once, reused, never removed), which meant every process that
+# ever called kit_git (every test run, every locked-build run) left one
+# more kit-git-home.* directory under $TMPDIR behind forever.
+kit_git() {
+  local git_home git_code
+  git_home="$(mktemp -d "${TMPDIR:-/tmp}/kit-git-home.XXXXXX")" \
+    || kit_die 2 "could not create a throwaway HOME for git"
+  env -i \
+    PATH=/usr/bin:/bin \
+    HOME="$git_home" \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
+  git_code=$?
+  rm -rf "$git_home"
+  return "$git_code"
+}

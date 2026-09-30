@@ -1,0 +1,125 @@
+#!/bin/bash
+# kit-codex-build --repo DIR --name NAME --brief FILE [--model MODEL]
+#
+# Runs one Codex build job against a throwaway clone of REPO's HEAD:
+#   run_export -> codex exec -m MODEL -s workspace-write -C wt < brief
+#   -> print the diff and run dir -> ledger_append codex
+#
+# No Paseo dependency: when this runs as a background Bash job, the user
+# still sees it, since Claude is what's driving it. This script never
+# merges; the caller reviews the printed diff.
+#
+# Exit: 0 ok · 2 bad input or dirty repo · 3 no codex on PATH ·
+# 4 provider/API error (codex exec failed, or a git stage/diff step after
+# it failed) · 5 secret scan refused.
+set -uo pipefail
+
+BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$BIN_DIR/kit-common"
+kit_require_macos
+. "$BIN_DIR/../lib/export.sh"
+. "$BIN_DIR/../lib/ledger.sh"
+. "$BIN_DIR/../lib/secret-scan.sh"
+
+MODELS_FILE="$BIN_DIR/../rules/models.json"
+REPO="" NAME="" BRIEF="" MODEL=""
+usage() { kit_die 2 "usage: kit-codex-build --repo DIR --name NAME --brief FILE [--model MODEL]"; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo)
+      [ $# -ge 2 ] || usage
+      REPO=$2; shift 2 ;;
+    --name)
+      [ $# -ge 2 ] || usage
+      NAME=$2; shift 2 ;;
+    --brief)
+      [ $# -ge 2 ] || usage
+      BRIEF=$2; shift 2 ;;
+    --model)
+      [ $# -ge 2 ] || usage
+      MODEL=$2; shift 2 ;;
+    *) usage ;;
+  esac
+done
+
+[ -n "$REPO" ] && [ -n "$NAME" ] && [ -n "$BRIEF" ] || usage
+
+# A tab, newline or carriage return in --name/--model would forge extra
+# ledger rows or columns downstream. lib/ledger.sh has its own guard; this
+# is the first line of defense, rejecting it at the CLI before anything
+# else runs.
+case "$NAME" in
+  *$'\t'*|*$'\n'*|*$'\r'*) kit_die 2 "--name may not contain a tab, newline, or carriage return" ;;
+esac
+case "$MODEL" in
+  *$'\t'*|*$'\n'*|*$'\r'*) kit_die 2 "--model may not contain a tab, newline, or carriage return" ;;
+esac
+
+[ -f "$BRIEF" ] || kit_die 2 "no such brief file: $BRIEF"
+
+# From here on, every exit writes exactly one ledger line -- success or
+# any failure -- through this single trap, so no exit path (a preflight
+# kit_die, a secret-scan refusal, a provider error) can skip it. The
+# ledger_append call runs in a subshell: ledger_append itself calls
+# kit_die (i.e. exit) if it can't create $KIT_HOME, and without the
+# subshell that exit would overwrite the status this trap is supposed to
+# be preserving. A warning goes to stderr instead; the original exit code
+# always wins.
+on_exit() {
+  code=$?
+  ( ledger_append codex "${MODEL:--}" "$NAME" - - "$code" ) \
+    || echo "kit-codex-build: warning: could not write a ledger line" >&2
+  exit "$code"
+}
+trap on_exit EXIT
+
+if [ -z "$MODEL" ]; then
+  MODEL=$(/usr/bin/jq -e -r '.codex.build' "$MODELS_FILE" 2>/dev/null) \
+    || kit_die 2 "invalid or incomplete models file at $MODELS_FILE"
+fi
+
+command -v codex >/dev/null 2>&1 \
+  || kit_die 3 "no codex on PATH: install the Codex CLI and run codex login"
+
+# run_export exits 2 itself on a dirty repo, no HEAD, or a non-repo path.
+run_dir=$(run_export "$REPO" "$NAME") || exit $?
+wt="$run_dir/wt"
+
+# secret_scan's filename-based rules (.env*, *.pem, id_rsa*, ...) key off
+# the brief's own name. Renaming it to a fixed "brief.md" snapshot would
+# silently bypass those, so check the original path first -- before it's
+# copied anywhere.
+if ! secret_scan --credentials-only "$BRIEF" >"$run_dir/secret-scan-brief-name.txt" 2>&1; then
+  cat "$run_dir/secret-scan-brief-name.txt" >&2
+  kit_die 5 "secret scan found a possible secret in the brief; refusing to send to codex ($run_dir/secret-scan-brief-name.txt)"
+fi
+
+# Snapshot the brief into the run dir, then scan and send that exact
+# snapshot. Scanning the original file and later re-reading it for `codex
+# exec` would leave a gap for another process to swap in secret-bearing
+# content in between.
+brief_snapshot="$run_dir/brief.md"
+cp "$BRIEF" "$brief_snapshot" || kit_die 2 "could not snapshot the brief into $run_dir"
+
+# The exported tree and the brief snapshot are about to go to a third
+# party (Codex). Refuse rather than leak a secret that happens to be
+# checked into the repo or pasted into the brief.
+if ! secret_scan --credentials-only "$wt" "$brief_snapshot" >"$run_dir/secret-scan.txt" 2>&1; then
+  cat "$run_dir/secret-scan.txt" >&2
+  kit_die 5 "secret scan found a possible secret; refusing to send to codex ($run_dir/secret-scan.txt)"
+fi
+
+# Never pass --dangerously-bypass-approvals-and-sandbox: workspace-write is
+# the sandbox, never full-access.
+if ! codex exec -m "$MODEL" -s workspace-write -C "$wt" < "$brief_snapshot" > "$run_dir/codex-output.txt" 2>&1; then
+  cat "$run_dir/codex-output.txt" >&2
+  if grep -Eiq 'not logged in|please log in|authentication required|unauthorized|run codex login' "$run_dir/codex-output.txt"; then
+    kit_die 3 "Codex is not logged in; run codex login"
+  fi
+  kit_die 4 "codex exec failed; see $run_dir/codex-output.txt"
+fi
+
+git -C "$wt" add -A || kit_die 4 "git add failed in $wt"
+git -C "$wt" diff --cached || kit_die 4 "git diff failed in $wt"
+echo "kit-codex-build: run dir: $run_dir"

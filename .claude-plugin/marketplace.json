@@ -1,0 +1,11 @@
+{
+  "name": "routing-kit",
+  "owner": { "name": "routing-kit" },
+  "plugins": [
+    {
+      "name": "routing-kit",
+      "source": "./plugins/routing-kit",
+      "description": "Model routing for Claude Code: Claude main, Codex/Jules optional, Kimi/GLM locked down"
+    }
+  ]
+}

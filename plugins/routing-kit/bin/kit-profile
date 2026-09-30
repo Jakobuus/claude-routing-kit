@@ -1,0 +1,86 @@
+#!/bin/bash
+# kit-profile — read/write/validate $KIT_HOME/profile.json.
+# Usage: kit-profile get | kit-profile set KEY VALUE | kit-profile validate
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$SCRIPT_DIR/kit-common"
+kit_require_macos
+
+PROFILE_PATH="$KIT_HOME/profile.json"
+
+DEFAULT_PROFILE='{"version":1,"codex":"none","jules":false,"kimi":false,"glm":false,"paseo":false}'
+
+cmd_get() {
+  if [ ! -f "$PROFILE_PATH" ]; then
+    kit_die 3 "no profile yet: run START-HERE.md"
+  fi
+  cat "$PROFILE_PATH"
+}
+
+valid_value() {
+  key="$1"; value="$2"
+  case "$key" in
+    claude_plan) case "$value" in pro|max5|max20|team|api) return 0 ;; *) return 1 ;; esac ;;
+    codex) case "$value" in none|plus|pro|business|api) return 0 ;; *) return 1 ;; esac ;;
+    jules|kimi|glm|paseo) case "$value" in true|false) return 0 ;; *) return 1 ;; esac ;;
+    version) case "$value" in 1) return 0 ;; *) return 1 ;; esac ;;
+    jules_daily_limit) case "$value" in ''|*[!0-9]*|0) return 1 ;; *) return 0 ;; esac ;;
+    *) return 1 ;;
+  esac
+}
+
+cmd_set() {
+  key="$1"; value="$2"
+  if [ -z "${key:-}" ] || [ -z "${value:-}" ]; then
+    kit_die 2 "usage: kit-profile set KEY VALUE"
+  fi
+  if ! valid_value "$key" "$value"; then
+    kit_die 2 "invalid value for $key: value not allowed"
+  fi
+  mkdir -p "$KIT_HOME"
+  if [ -f "$PROFILE_PATH" ]; then
+    base=$(cat "$PROFILE_PATH")
+  else
+    base="$DEFAULT_PROFILE"
+  fi
+  tmp="$KIT_HOME/profile.json.tmp.$$"
+  case "$key" in
+    jules|kimi|glm|paseo|version|jules_daily_limit)
+      echo "$base" | /usr/bin/jq --arg k "$key" --argjson v "$value" '.[$k] = $v' > "$tmp" || { rm -f "$tmp"; kit_die 2 "could not write profile"; }
+      ;;
+    *)
+      echo "$base" | /usr/bin/jq --arg k "$key" --arg v "$value" '.[$k] = $v' > "$tmp" || { rm -f "$tmp"; kit_die 2 "could not write profile"; }
+      ;;
+  esac
+  mv "$tmp" "$PROFILE_PATH" || { rm -f "$tmp"; kit_die 2 "could not save profile"; }
+}
+
+cmd_validate() {
+  if [ ! -f "$PROFILE_PATH" ]; then
+    exit 2
+  fi
+  /usr/bin/jq -e '
+    (.version == 1) and
+    ((.claude_plan // "") as $c | ["pro","max5","max20","team","api"] | index($c) != null) and
+    ((if .codex == null then "none" else .codex end) as $c |
+      ($c | type) == "string" and (["none","plus","pro","business","api"] | index($c) != null)) and
+    ((.jules // false) == true or (.jules // false) == false) and
+    ((.kimi // false) == true or (.kimi // false) == false) and
+    ((.glm // false) == true or (.glm // false) == false) and
+    ((.paseo // false) == true or (.paseo // false) == false) and
+    ((.jules_daily_limit // 15) as $j | ($j | type) == "number" and ($j == ($j | floor)) and $j > 0)
+  ' "$PROFILE_PATH" >/dev/null 2>&1
+  code=$?
+  if [ "$code" -ne 0 ]; then
+    exit 2
+  fi
+  exit 0
+}
+
+case "${1:-}" in
+  get) cmd_get ;;
+  set) shift; cmd_set "${1:-}" "${2:-}" ;;
+  validate) cmd_validate ;;
+  *) kit_die 2 "usage: kit-profile get|set KEY VALUE|validate" ;;
+esac

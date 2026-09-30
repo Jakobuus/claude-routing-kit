@@ -1,0 +1,6 @@
+{
+  "id": "routing-kit-pill",
+  "requirements": {
+    "paseo": ">=0.9.1"
+  }
+}

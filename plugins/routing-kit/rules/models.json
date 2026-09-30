@@ -1,0 +1,57 @@
+{
+  "claude": {
+    "strong": "opus",
+    "build": "sonnet",
+    "lookup": "haiku"
+  },
+  "codex": {
+    "strong": "gpt-6-astra",
+    "build": "gpt-6-sol",
+    "lookup": "gpt-6-luna"
+  },
+  "kimi": {
+    "build": "kimi-k2.7-code",
+    "base_url": "https://api.moonshot.ai/anthropic",
+    "host": "api.moonshot.ai"
+  },
+  "glm": {
+    "build": "glm-5.3",
+    "base_url": "https://api.z.ai/api/anthropic",
+    "host": "api.z.ai"
+  },
+  "pricing": {
+    "opus": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "sonnet": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "haiku": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "gpt-6-astra": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "gpt-6-sol": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "gpt-6-luna": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "kimi-k2.7-code": {
+      "price_in_per_mtok": 0.95,
+      "price_out_per_mtok": 4.00
+    },
+    "glm-5.3": {
+      "price_in_per_mtok": 1.40,
+      "price_out_per_mtok": 4.40
+    }
+  },
+  "pricing_checked": "2026-09-29, providers pricing pages; cached input is billed at the full input price here, so spend is an upper estimate"
+}

@@ -1,0 +1,199 @@
+#!/bin/bash
+# kit-statusline — the friend's statusLine command. Reads the statusline
+# JSON Claude Code sends on stdin, saves its .rate_limits into
+# $KIT_HOME/claude-limits.json for kit-quota to read later, then chains to
+# the friend's own previous statusline command (if they had one) so this
+# kit never replaces their existing statusline, only rides along with it.
+#
+# Never the OAuth usage endpoint -- the only source used here is the
+# statusline JSON Claude Code already sends on stdin, which is the
+# documented, Consumer-Terms-safe way to read rate limit usage.
+#
+# bash 3.2 compatible: no mapfile, no ${x,,}, no associative arrays.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$SCRIPT_DIR/kit-common"
+kit_require_macos
+
+# `kit-statusline install|uninstall` manage the stable shim described
+# below, plus Claude Code's settings.json and the saved previous state. Every
+# other invocation (in particular the plain, no-arg form Claude Code itself
+# runs as the statusLine command) falls through unchanged to the original
+# behavior below.
+CLAUDE_DIR="$(kit_claude_dir)"
+SETTINGS_PATH="$CLAUDE_DIR/settings.json"
+SHIM_PATH="$KIT_HOME/bin/statusline"
+PROFILE_PATH_FOR_INSTALL="$KIT_HOME/profile.json"
+PREVIOUS_PATH="$KIT_HOME/statusline-previous.json"
+
+# jq_write_atomic FILE JQ_FILTER [JQ_ARGS...] -- FILE (created as "{}" if
+# absent) piped through jq with FILTER and any extra args, written back
+# atomically (tmp + mv), never left half-written on a jq failure.
+jq_write_atomic() {
+  local path="$1" filter="$2" base tmp
+  shift 2
+  if [ -f "$path" ]; then
+    base=$(cat "$path")
+  else
+    base='{}'
+  fi
+  echo "$base" | /usr/bin/jq -e . >/dev/null 2>&1 \
+    || kit_die 2 "not valid JSON, refusing to touch it: $path"
+  mkdir -p "$(dirname "$path")" || kit_die 2 "could not create $(dirname "$path")"
+  tmp="$path.tmp.$$"
+  if ! echo "$base" | /usr/bin/jq "$@" "$filter" > "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    kit_die 2 "could not update $path"
+  fi
+  mv "$tmp" "$path" || { rm -f "$tmp"; kit_die 2 "could not save $path"; }
+}
+
+# write_shim -- (re)writes the stable shim at $KIT_HOME/bin/statusline. The
+# plugin's own install directory changes on every `claude plugin update`
+# (a new version directory under Claude Code's plugins folder), so settings.json can't
+# point at bin/kit-statusline directly -- it points at this shim instead,
+# which re-resolves the newest installed kit-statusline every time it runs.
+write_shim() {
+  mkdir -p "$KIT_HOME/bin" || kit_die 2 "could not create $KIT_HOME/bin"
+  tmp="$SHIM_PATH.tmp.$$"
+  cat > "$tmp" <<'EOF'
+#!/bin/bash
+# routing-kit statusline shim, written by `kit-statusline install`. Do not
+# edit by hand -- `kit-statusline uninstall` removes this file, and a
+# fresh `install` overwrites it. Re-resolves the newest installed
+# kit-statusline every run, since the plugin's install directory changes
+# on every `claude plugin update`.
+set -u
+EOF
+  printf 'CLAUDE_CONFIG_DIR=%q\nexport CLAUDE_CONFIG_DIR\n' "$CLAUDE_DIR" >> "$tmp"
+  cat >> "$tmp" <<'EOF'
+newest='' newest_mtime=-1
+while IFS= read -r -d '' f; do
+  mtime=$(stat -f '%m' "$f" 2>/dev/null) || continue
+  if [ "$mtime" -gt "$newest_mtime" ]; then
+    newest_mtime="$mtime"
+    newest="$f"
+  fi
+done < <(find "$CLAUDE_CONFIG_DIR/plugins" -type f -path '*/routing-kit/*bin/kit-statusline' -print0 2>/dev/null)
+
+if [ -n "$newest" ] && [ -x "$newest" ]; then
+  exec "$newest"
+fi
+if command -v kit-statusline >/dev/null 2>&1; then
+  exec kit-statusline
+fi
+echo "routing-kit (kit-statusline not found; run: claude plugin update routing-kit@routing-kit)"
+exit 0
+EOF
+  chmod +x "$tmp" || { rm -f "$tmp"; kit_die 2 "could not make the shim executable"; }
+  mv "$tmp" "$SHIM_PATH" || { rm -f "$tmp"; kit_die 2 "could not install the shim"; }
+}
+
+# cmd_install -- idempotent: running it again while the shim is already
+# the active statusLine command leaves the saved previous state untouched (it
+# never overwrites a saved value with the shim's own path).
+cmd_install() {
+  write_shim
+
+  local current_cmd previous_json
+  migrate_previous
+  if [ -f "$SETTINGS_PATH" ]; then
+    current_cmd=$(/usr/bin/jq -r '.statusLine.command // empty' "$SETTINGS_PATH" 2>/dev/null)
+    previous_json=$(/usr/bin/jq -c '.statusLine // empty' "$SETTINGS_PATH" 2>/dev/null)
+  else
+    current_cmd=''
+    previous_json=''
+  fi
+  if [ "$current_cmd" != "$SHIM_PATH" ] && [ -n "$previous_json" ]; then
+    jq_write_atomic "$PREVIOUS_PATH" '.previous_statusline_json = $p' --argjson p "$previous_json"
+  fi
+
+  jq_write_atomic "$SETTINGS_PATH" '.statusLine = ((.statusLine // {}) + {"type":"command","command":$c})' --arg c "$SHIM_PATH"
+}
+
+# cmd_uninstall -- restores the saved statusLine only while the kit shim is
+# active, then removes saved state and the shim. Safe to repeat.
+cmd_uninstall() {
+  local prev='' prev_json=''
+  migrate_previous
+  if [ -f "$PREVIOUS_PATH" ]; then
+    prev=$(/usr/bin/jq -r '.previous_statusline // empty' "$PREVIOUS_PATH" 2>/dev/null)
+    prev_json=$(/usr/bin/jq -c '.previous_statusline_json | select(type == "object")' "$PREVIOUS_PATH" 2>/dev/null)
+  fi
+
+  local current_cmd=''
+  if [ -f "$SETTINGS_PATH" ]; then
+    current_cmd=$(/usr/bin/jq -r '.statusLine.command // empty' "$SETTINGS_PATH" 2>/dev/null)
+  fi
+  if [ "$current_cmd" = "$SHIM_PATH" ]; then
+    if [ -n "$prev_json" ]; then
+      jq_write_atomic "$SETTINGS_PATH" '.statusLine = $p' --argjson p "$prev_json"
+    elif [ -n "$prev" ]; then
+      jq_write_atomic "$SETTINGS_PATH" '.statusLine = {"type":"command","command":$c}' --arg c "$prev"
+    else
+      jq_write_atomic "$SETTINGS_PATH" 'del(.statusLine)'
+    fi
+  fi
+
+  rm -f "$PREVIOUS_PATH"
+  rm -f "$SHIM_PATH"
+}
+
+# Move legacy fields out of profile.json before either install or uninstall.
+migrate_previous() {
+  [ -f "$PROFILE_PATH_FOR_INSTALL" ] || return 0
+  local legacy_json legacy_cmd legacy_present
+  legacy_json=$(/usr/bin/jq -c '.previous_statusline_json | select(type == "object")' "$PROFILE_PATH_FOR_INSTALL" 2>/dev/null)
+  legacy_cmd=$(/usr/bin/jq -r '.previous_statusline // empty' "$PROFILE_PATH_FOR_INSTALL" 2>/dev/null)
+  legacy_present=$(/usr/bin/jq -r 'has("previous_statusline") or has("previous_statusline_json")' "$PROFILE_PATH_FOR_INSTALL" 2>/dev/null)
+  if [ ! -f "$PREVIOUS_PATH" ]; then
+    if [ -n "$legacy_json" ]; then
+      jq_write_atomic "$PREVIOUS_PATH" '.previous_statusline_json = $p' --argjson p "$legacy_json"
+    elif [ -n "$legacy_cmd" ]; then
+      jq_write_atomic "$PREVIOUS_PATH" '.previous_statusline = $c' --arg c "$legacy_cmd"
+    fi
+  fi
+  if [ "$legacy_present" = true ]; then
+    jq_write_atomic "$PROFILE_PATH_FOR_INSTALL" 'del(.previous_statusline, .previous_statusline_json)'
+  fi
+}
+
+case "${1:-}" in
+  install) cmd_install; exit 0 ;;
+  uninstall) cmd_uninstall; exit 0 ;;
+esac
+
+input=$(cat)
+
+LIMITS_PATH="$KIT_HOME/claude-limits.json"
+
+# rate_limits is absent for non-subscription accounts and before the first
+# API response of a session -- leave any previously saved file untouched.
+rl=$(printf '%s' "$input" | /usr/bin/jq -c '.rate_limits // empty' 2>/dev/null)
+if [ -n "$rl" ] && [ "$rl" != "null" ]; then
+  out=$(printf '%s' "$rl" | /usr/bin/jq -c --argjson sampled "$(date +%s)" \
+    '{five_hour: (.five_hour // null), seven_day: (.seven_day // null), sampled: $sampled}' 2>/dev/null)
+  if [ -n "$out" ]; then
+    mkdir -p "$KIT_HOME" 2>/dev/null
+    tmp="$KIT_HOME/.claude-limits.json.tmp.$$"
+    if printf '%s\n' "$out" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$LIMITS_PATH" 2>/dev/null || rm -f "$tmp"
+    else
+      rm -f "$tmp"
+    fi
+  fi
+fi
+
+# Chain to the friend's previous statusline command, stored (by the
+# installer, not by kit-profile -- it's a free-form string, not one of
+# kit-profile's enumerated keys) in statusline-previous.json.
+prev=$(/usr/bin/jq -r 'if (.previous_statusline_json | type) == "object" then .previous_statusline_json.command // empty else .previous_statusline // empty end' "$PREVIOUS_PATH" 2>/dev/null)
+
+if [ -n "$prev" ]; then
+  printf '%s' "$input" | bash -c "$prev"
+  exit 0
+fi
+
+echo "routing-kit (no previous statusline configured)"
+exit 0

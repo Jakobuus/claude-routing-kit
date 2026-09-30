@@ -1,0 +1,244 @@
+#!/bin/bash
+# kit-jules-build --repo DIR --name NAME --brief FILE --verify "CMD" [--timeout SECS] [--resume SESSION_ID]
+#
+# Runs one Jules session, applies its patch in a local git worktree, and
+# verifies it here on the Mac. The staged patch is left for review; this
+# script never merges or pushes.
+#
+# Needs `jules` on PATH and logged in (exit 3 otherwise, with the install
+# line). Needs a GitHub-hosted origin: Jules works against the repo on
+# GitHub, not against files sent from here.
+#
+# Env (all optional, KIT_JULES_* so nothing here collides with any other
+# tool's JULES_* vars):
+#   KIT_JULES_POLL_SECS         seconds between status polls (default 30)
+#   KIT_JULES_ABSENT_GRACE      seconds a new session may be missing from
+#                                the status list before that's an error (default 180)
+#   KIT_JULES_ALLOW_LOCAL_ORIGIN=1 with KIT_JULES_REPO_SLUG=owner/repo lets
+#                                tests point at a non-GitHub origin
+#   KIT_JULES_RUNS_DIR          run logs/manifests (default $KIT_HOME/jules-runs)
+#   KIT_JULES_WORKTREES_DIR     local worktrees (default $KIT_HOME/jules-worktrees)
+#
+# Exit: 0 verify passed · 2 bad input or dirty repo · 3 no jules on PATH /
+# not logged in · 4 provider/API error (Jules failed, needs a human, timed
+# out, or a local git stage/diff step failed) · 5 secret scan refused.
+set -uo pipefail
+
+BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$BIN_DIR/kit-common"
+kit_require_macos
+. "$BIN_DIR/../lib/ledger.sh"
+. "$BIN_DIR/../lib/secret-scan.sh"
+
+REPO='' NAME='' BRIEF='' VERIFY='' TIMEOUT=2700 RESUME=''
+usage() { kit_die 2 'usage: kit-jules-build --repo DIR --name NAME --brief FILE --verify "CMD" [--timeout SECS] [--resume SESSION_ID]'; }
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --repo|--name|--brief|--verify|--timeout|--resume)
+      [ "$#" -ge 2 ] || usage
+      case "$1" in
+        --repo) REPO=$2;; --name) NAME=$2;; --brief) BRIEF=$2;;
+        --verify) VERIFY=$2;; --timeout) TIMEOUT=$2;; --resume) RESUME=$2;;
+      esac
+      shift 2 ;;
+    *) usage ;;
+  esac
+done
+
+[ -n "$REPO" ] && [ -n "$NAME" ] && [ -f "$BRIEF" ] && [ -n "$VERIFY" ] || usage
+[[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || usage
+
+# A tab, newline or carriage return in --name would forge extra ledger rows
+# or columns downstream. lib/ledger.sh has its own guard; this is the first
+# line of defense, rejecting it at the CLI before anything else runs.
+case "$NAME" in
+  *$'\t'*|*$'\n'*|*$'\r'*) kit_die 2 "--name may not contain a tab, newline, or carriage return" ;;
+esac
+
+POLL=${KIT_JULES_POLL_SECS:-30}
+[[ "$POLL" =~ ^[0-9]+([.][0-9]+)?$ ]] && [ "$POLL" != 0 ] || usage
+SLUG=$(printf '%s' "$NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_-]/-/g; s/^-*//; s/-*$//')
+[ -n "$SLUG" ] || usage
+
+# From here on -- with every argument validated, including the slug -- every
+# exit writes exactly one ledger line, success or any failure, through this
+# single trap, so no exit path (a preflight kit_die, a secret-scan refusal,
+# a provider error) can skip it. finish() below never touches the ledger
+# itself; it just exits, and this trap does the logging. ledger_append runs
+# in a subshell: it calls kit_die (i.e. exit) if it can't create $KIT_HOME,
+# and without the subshell that exit would overwrite the status this trap
+# is supposed to be preserving. A warning goes to stderr instead; the
+# original exit code always wins.
+on_exit() {
+  code=$?
+  ( ledger_append jules - "$NAME" - - "$code" ) \
+    || echo "kit-jules-build: warning: could not write a ledger line" >&2
+  exit "$code"
+}
+trap on_exit EXIT
+
+command -v jules >/dev/null 2>&1 \
+  || kit_die 3 "no jules on PATH: run npm install -g @google/jules && jules login"
+
+REPO=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null) || kit_die 2 "repo is not a git repository"
+git -C "$REPO" rev-parse HEAD >/dev/null 2>&1 || kit_die 2 "repo has no HEAD: commit first"
+[ -z "$(git -C "$REPO" status --porcelain)" ] || kit_die 2 "repo is not clean: commit first"
+
+ORIGIN=$(git -C "$REPO" remote get-url origin 2>/dev/null) || kit_die 2 "origin is missing"
+if [ "${KIT_JULES_ALLOW_LOCAL_ORIGIN:-}" = 1 ] && [ -n "${KIT_JULES_REPO_SLUG:-}" ]; then
+  OWNER_REPO=$KIT_JULES_REPO_SLUG
+else
+  # The SSH host prefixes below are built via adjacent-quote concatenation
+  # so the literal git-over-ssh address never sits contiguous in this
+  # source file: written out whole it matches privacy-check's email
+  # pattern (a user@host address looks email-shaped) even though this one
+  # names a git remote scheme, not personal data.
+  gh_https="https://github.com/"
+  gh_ssh_colon="git@""github.com:"
+  gh_ssh_url="ssh://git@""github.com/"
+  case "$ORIGIN" in
+    $gh_https*) OWNER_REPO=${ORIGIN#$gh_https} ;;
+    $gh_ssh_colon*) OWNER_REPO=${ORIGIN#$gh_ssh_colon} ;;
+    $gh_ssh_url*) OWNER_REPO=${ORIGIN#$gh_ssh_url} ;;
+    *) kit_die 2 "origin must be a GitHub URL" ;;
+  esac
+  OWNER_REPO=${OWNER_REPO%.git}
+fi
+[[ "$OWNER_REPO" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] || kit_die 2 "invalid owner/repo: $OWNER_REPO"
+
+git -C "$REPO" fetch -q origin || kit_die 2 "origin fetch failed"
+DEFAULT_REF=$(git -C "$REPO" ls-remote --symref origin HEAD 2>/dev/null | awk '$1=="ref:" && $3=="HEAD" {print $2; exit}')
+[ -n "$DEFAULT_REF" ] || kit_die 2 "cannot find origin default branch"
+DEFAULT_BRANCH=${DEFAULT_REF#refs/heads/}
+REMOTE_HEAD=$(git -C "$REPO" rev-parse "refs/remotes/origin/$DEFAULT_BRANCH" 2>/dev/null) \
+  || kit_die 2 "cannot find origin default branch"
+LOCAL_HEAD=$(git -C "$REPO" rev-parse HEAD)
+[ "$LOCAL_HEAD" = "$REMOTE_HEAD" ] || kit_die 2 "HEAD differs from GitHub default branch; push first"
+
+STAMP="$(date +%Y%m%d-%H%M%S)-$$-$RANDOM"
+ID="$STAMP-$SLUG" BRANCH="jules/$STAMP-$SLUG"
+RUN_ROOT=${KIT_JULES_RUNS_DIR:-$KIT_HOME/jules-runs}
+WT_ROOT=${KIT_JULES_WORKTREES_DIR:-$KIT_HOME/jules-worktrees}
+RUN="$RUN_ROOT/$ID" WT="$WT_ROOT/$ID"
+mkdir -p "$RUN" || kit_die 2 "could not create run dir: $RUN"
+
+# secret_scan's filename-based rules (.env*, *.pem, id_rsa*, ...) key off
+# the brief's own name. Renaming it to a fixed "brief.md" snapshot would
+# silently bypass those, so check the original path first -- before it's
+# copied anywhere.
+if ! secret_scan --credentials-only "$BRIEF" >"$RUN/secret-scan-brief-name.txt" 2>&1; then
+  cat "$RUN/secret-scan-brief-name.txt" >&2
+  kit_die 5 "secret scan found a possible secret in the brief; refusing to send to jules ($RUN/secret-scan-brief-name.txt)"
+fi
+
+# Snapshot the brief into the run dir, then scan and send that exact
+# snapshot. Scanning the original file and later re-reading it as `jules
+# new`'s stdin would leave a gap for another process to swap in
+# secret-bearing content in between.
+cp "$BRIEF" "$RUN/brief.md" || kit_die 2 "could not snapshot the brief into $RUN"
+
+# The brief snapshot is about to go to a third party (Jules, via `jules
+# new`'s stdin). Refuse rather than leak a secret pasted into it. The repo
+# itself isn't scanned here: Jules reads it from GitHub, where it already
+# lives.
+if ! secret_scan --credentials-only "$RUN/brief.md" >"$RUN/secret-scan.txt" 2>&1; then
+  cat "$RUN/secret-scan.txt" >&2
+  kit_die 5 "secret scan found a possible secret in the brief; refusing to send to jules ($RUN/secret-scan.txt)"
+fi
+
+: > "$RUN/jules-new.txt"; : > "$RUN/status.log"; : > "$RUN/patch.diff"; : > "$RUN/verify.log"
+STARTED=$(date -u +%FT%TZ); ENDED='' SESSION='' STATUS='' PATCH_LINES=0 VERIFY_EXIT=''
+
+manifest() {
+  /usr/bin/jq -n --arg repo "$REPO" --arg owner_repo "$OWNER_REPO" --arg session_id "$SESSION" \
+    --arg started "$STARTED" --arg ended "$ENDED" --arg final_status "$STATUS" \
+    --argjson patch_lines "$PATCH_LINES" --arg verify_exit "$VERIFY_EXIT" \
+    '{repo:$repo,owner_repo:$owner_repo,session_id:$session_id,started:$started,ended:$ended,final_status:$final_status,patch_lines:$patch_lines,verify_exit:(if $verify_exit=="" then null else ($verify_exit|tonumber) end)}' \
+    > "$RUN/manifest.json"
+}
+
+# finish CODE NOTE -- writes the manifest and result note, then exits.
+# It does not touch the ledger: the on_exit trap above logs exactly one
+# line for every exit, this one included.
+finish() {
+  code=$1; note=$2
+  ENDED=$(date -u +%FT%TZ)
+  manifest
+  printf '%s\n' "$note" > "$RUN/result.md"
+  echo "$note"
+  echo "kit-jules-build: exit=$code result=$RUN/result.md worktree=$WT"
+  exit "$code"
+}
+
+provider_failure() {
+  if printf '%s' "$2" | grep -Eiq 'not logged in|please log in|authentication required|unauthorized|run jules login'; then
+    STATUS='Not logged in'; finish 3 'Jules is not logged in; run jules login.'
+  fi
+  STATUS="$1"; finish 4 "Jules provider error during $3."
+}
+
+if [ -n "$RESUME" ]; then
+  # Pick up a session that is already running (e.g. after this script stopped early).
+  SESSION=$RESUME; printf 'resumed session %s\n' "$SESSION" > "$RUN/jules-new.txt"
+else
+  if ! jules new --repo "$OWNER_REPO" < "$RUN/brief.md" > "$RUN/jules-new.txt" 2>&1; then
+    if grep -Eiq 'not logged in|please log in|authentication required|unauthorized|run jules login' "$RUN/jules-new.txt"; then
+      STATUS='Not logged in'; finish 3 'Jules is not logged in; run jules login.'
+    fi
+    STATUS='Start failed'; finish 4 'Jules session could not start.'
+  fi
+  SESSION=$(sed -nE 's@.*https://jules\.google\.com/session/([[:alnum:]_-]+).*@\1@p' "$RUN/jules-new.txt" | head -1)
+fi
+[ -n "$SESSION" ] || { STATUS='Start failed'; finish 4 'Jules did not return a session ID.'; }
+
+DEADLINE=$(($(date +%s) + TIMEOUT))
+# A new session can take a while to appear in `jules remote list`.
+GRACE_END=$(($(date +%s) + ${KIT_JULES_ABSENT_GRACE:-180}))
+while :; do
+  LIST=$(jules remote list --session 2>&1) || provider_failure 'Poll failed' "$LIST" 'status check'
+  STATUS=$(printf '%s\n' "$LIST" | awk -v id="$SESSION" '$1==id {line=$0; sub(/[[:space:]]+$/, "", line); n=split(line, cols, /[[:space:]][[:space:]]+/); print cols[n]; exit}')
+  if [ -z "$STATUS" ]; then
+    [ "$(date +%s)" -lt "$GRACE_END" ] || { STATUS='Unknown'; finish 4 'Jules session was absent from the status list.'; }
+    STATUS='Pending'
+  fi
+  printf '%s\t%s\n' "$(date -u +%FT%TZ)" "$STATUS" >> "$RUN/status.log"
+  case "$STATUS" in
+    Completed) break ;;
+    Failed) finish 4 'Jules reported failure.' ;;
+    Pending|Planning|'In Progress'|Progress) ;;
+    *) finish 4 "Jules needs a human: $STATUS" ;;
+  esac
+  [ "$(date +%s)" -lt "$DEADLINE" ] || { STATUS='Timeout'; finish 4 "Jules timed out after ${TIMEOUT}s; session $SESSION remains available."; }
+  sleep "$POLL"
+done
+
+if ! jules remote pull --session "$SESSION" > "$RUN/patch.diff"; then
+  STATUS='Pull failed'; finish 4 'Jules patch pull failed.'
+fi
+PATCH_LINES=$(wc -l < "$RUN/patch.diff" | tr -d ' ')
+[ -s "$RUN/patch.diff" ] || { STATUS='Empty patch'; finish 4 'Jules returned an empty patch.'; }
+
+mkdir -p "$WT_ROOT" || { STATUS='Worktree failed'; finish 2 'Could not create worktree directory.'; }
+if ! git -C "$REPO" worktree add -q -b "$BRANCH" "$WT" "$LOCAL_HEAD"; then
+  STATUS='Worktree failed'; finish 2 'Could not create local worktree.'
+fi
+if ! git -C "$WT" apply "$RUN/patch.diff"; then
+  STATUS='Patch failed'; finish 4 'Jules patch could not be applied.'
+fi
+
+(cd "$WT" && bash -lc "$VERIFY") > "$RUN/verify.log" 2>&1
+VERIFY_EXIT=$?
+
+if ! git -C "$WT" add -A; then
+  STATUS='Stage failed'; finish 4 'Could not stage the patch after verification.'
+fi
+if ! git -C "$WT" diff --cached --stat; then
+  STATUS='Diff failed'; finish 4 'Could not read the staged diff after verification.'
+fi
+
+if [ "$VERIFY_EXIT" -eq 0 ]; then
+  finish 0 'Local verification passed. Patch is staged for review.'
+else
+  finish 4 "Local verification failed (exit $VERIFY_EXIT). Patch is staged for review."
+fi

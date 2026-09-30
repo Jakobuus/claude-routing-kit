@@ -1,0 +1,345 @@
+#!/bin/bash
+# kit-quota [--json] — one-line (or one-JSON-object) view of every lane's
+# usage, in the same spirit as ~/.claude/bin/quota, built entirely from
+# sources this kit is allowed to touch:
+#   Claude   $KIT_HOME/claude-limits.json, written by kit-statusline from
+#            the statusline JSON's .rate_limits (never the OAuth usage
+#            endpoint -- that would breach the Consumer Terms).
+#   Codex    the newest ~/.codex/sessions/**/*.jsonl line that carries
+#            rate_limits (ported window-picking logic from codex-usage).
+#   Jules    `jules remote list --session` (ported table-parsing logic
+#            from jules-usage; daily limit fixed at 15 for this kit).
+#   Kimi/GLM the token and cost sums of $KIT_HOME/ledger.tsv's locked-build
+#            rows since the 1st of the month.
+#
+# A lane the friend's profile has off is left out of the text line
+# entirely and reported as null under --json. A lane whose data could not
+# be read (missing file, malformed JSON, no jules on PATH, ...) shows as
+# "-" in the text and null under --json -- this script always exits 0
+# once its own flags are valid; a friend's dashboard must never go blank
+# because one provider's data was unreadable.
+#
+# bash 3.2 compatible: no mapfile, no ${x,,}, no associative arrays.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$SCRIPT_DIR/kit-common"
+kit_require_macos
+
+AS_JSON=0
+case "${1:-}" in
+  '') ;;
+  --json) AS_JSON=1 ;;
+  *) kit_die 2 "usage: kit-quota [--json]" ;;
+esac
+
+NOW=$(date +%s)
+CODEX_SESSIONS="${CODEX_HOME:-$HOME/.codex}/sessions"
+JULES_CONCURRENT_LIMIT=${KIT_JULES_CONCURRENT_LIMIT:-15}
+JULES_SEEN_FILE="$KIT_HOME/jules-seen.tsv"
+
+# ---- profile (which lanes are on) -----------------------------------
+PROFILE_PATH="$KIT_HOME/profile.json"
+prof_codex='none'
+prof_jules='false'
+prof_kimi='false'
+prof_glm='false'
+prof_jules_daily_limit=''
+if [ -f "$PROFILE_PATH" ]; then
+  row=$(/usr/bin/jq -r '[(.codex // "none"), (.jules // false), (.kimi // false), (.glm // false), (.jules_daily_limit // 15)] | @tsv' \
+    "$PROFILE_PATH" 2>/dev/null)
+  if [ -n "$row" ]; then
+    IFS=$'\t' read -r prof_codex prof_jules prof_kimi prof_glm prof_jules_daily_limit <<< "$row"
+  fi
+fi
+
+# The env var always wins (documented override for tests and for a friend
+# who wants to try a number without touching the profile); otherwise use
+# the profile's jules_daily_limit (kit-profile validates it's a positive
+# integer, but fall back to 15 defensively if it somehow isn't); default 15
+# (free-plan Jules) when neither is set.
+if [ -n "${KIT_JULES_DAILY_LIMIT:-}" ]; then
+  JULES_DAILY_LIMIT="$KIT_JULES_DAILY_LIMIT"
+elif [[ "$prof_jules_daily_limit" =~ ^[1-9][0-9]*$ ]]; then
+  JULES_DAILY_LIMIT="$prof_jules_daily_limit"
+else
+  JULES_DAILY_LIMIT=15
+fi
+
+# ---- bucket PERCENT RESET WINDOW STALE_OK -- sets BTEXT/BJSON --------
+# Same shape as ~/.claude/bin/quota's bucket(): a window whose reset time
+# has passed has started over, so the old percent no longer applies. Pace
+# is only meaningful once at least a tenth of the window has elapsed.
+bucket() {
+  local percent="$1" reset="$2" window="$3"
+  local pace='null' flag='' elapsed raw_percent
+  BTEXT='–'
+  BJSON='{"percent":null,"resets_epoch":null,"pace":null}'
+  [[ $percent =~ ^[0-9]+([.][0-9]+)?$ && $reset =~ ^[0-9]+$ ]] || return
+  if (( reset <= NOW )); then
+    BTEXT='0% (reset)'
+    BJSON=$(printf '{"percent":0,"resets_epoch":%s,"pace":null}' "$reset")
+    return
+  fi
+  raw_percent=$percent
+  percent=$(/usr/bin/jq -nr --arg v "$percent" '$v | tonumber | floor')
+  elapsed=$((window - (reset - NOW)))
+  if (( elapsed >= window / 10 )); then
+    pace=$(/usr/bin/jq -nr --argjson p "$raw_percent" --argjson w "$window" --argjson e "$elapsed" \
+      '($p * $w / $e + 0.5) | floor')
+    if (( pace >= 100 )); then flag=' !'; fi
+    BTEXT="${percent}% (pace ${pace}%${flag})"
+  else
+    BTEXT="${percent}% (pace –)"
+  fi
+  BJSON=$(printf '{"percent":%s,"resets_epoch":%s,"pace":%s}' "$percent" "$reset" "$pace")
+}
+
+# ---- Claude: $KIT_HOME/claude-limits.json ----------------------------
+claude_text='Claude 5h – · wk –'
+claude_json='{"five_hour":{"percent":null,"resets_epoch":null,"pace":null},"week":{"percent":null,"resets_epoch":null,"pace":null},"stale":false}'
+LIMITS_PATH="$KIT_HOME/claude-limits.json"
+if [ -f "$LIMITS_PATH" ]; then
+  row=$(/usr/bin/jq -r '
+    [ (.five_hour.used_percentage // ""),
+      (.five_hour.resets_at // ""),
+      (.seven_day.used_percentage // ""),
+      (.seven_day.resets_at // ""),
+      (.sampled // "") ] | @tsv
+  ' "$LIMITS_PATH" 2>/dev/null)
+  if [ -n "$row" ]; then
+    c5_pct=$(printf '%s\n' "$row" | cut -f1)
+    c5_reset=$(printf '%s\n' "$row" | cut -f2)
+    cwk_pct=$(printf '%s\n' "$row" | cut -f3)
+    cwk_reset=$(printf '%s\n' "$row" | cut -f4)
+    c_sampled=$(printf '%s\n' "$row" | cut -f5)
+    bucket "$c5_pct" "$c5_reset" 18000
+    c5_text=$BTEXT c5_json=$BJSON
+    bucket "$cwk_pct" "$cwk_reset" 604800
+    cwk_text=$BTEXT cwk_json=$BJSON
+
+    stale='false'
+    age_suffix=''
+    if [[ $c_sampled =~ ^[0-9]+$ ]]; then
+      age=$((NOW - c_sampled))
+      if (( age > 21600 )); then
+        stale='true'
+        age_suffix=" ($((age / 3600)) h old)"
+      fi
+    fi
+    claude_text="Claude 5h ${c5_text} · wk ${cwk_text}${age_suffix}"
+    claude_json=$(printf '{"five_hour":%s,"week":%s,"stale":%s}' "$c5_json" "$cwk_json" "$stale")
+  fi
+fi
+
+# ---- Codex: newest ~/.codex/sessions/**/*.jsonl line with rate_limits -
+codex_text='' codex_json='null'
+if [ "$prof_codex" != none ] && [ -d "$CODEX_SESSIONS" ]; then
+  line=''
+  while IFS= read -r file; do
+    candidate=$(grep 'rate_limits' "$file" 2>/dev/null | tail -n 1)
+    if [ -n "$candidate" ]; then line=$candidate; break; fi
+  done < <(find "$CODEX_SESSIONS" -mindepth 4 -maxdepth 4 -type f -name '*.jsonl' \
+             -exec stat -f '%m %N' {} + 2>/dev/null | sort -rn | head -n 5 | cut -d' ' -f2-)
+  if [ -n "$line" ]; then
+    result=$(printf '%s\n' "$line" | /usr/bin/jq -r --argjson now "$NOW" '
+      def valid: type == "object" and (.used_percent | type == "number") and (.resets_at | type == "number");
+      def pick($slot; $minutes):
+        [.primary, .secondary] | map(select(valid)) as $w
+        | if any($w[]; has("window_minutes")) then ($w | map(select(.window_minutes == $minutes)) | first)
+          else (if $slot == "primary" then .[0] else .[1] end | select(valid)) end;
+      def cell: if . == null then "- -"
+        else "\(if .resets_at <= $now then 0 else (.used_percent | floor) end) \(.resets_at | floor)" end;
+      [.. | objects | select(has("rate_limits")) | .rate_limits] | last // empty
+      | [([pick("primary"; 300)] | first), ([pick("secondary"; 10080)] | first)]
+      | select(any(.[]; . != null))
+      | map(cell) | join(" ")
+    ' 2>/dev/null)
+  fi
+  if [ -n "${result:-}" ]; then
+    read -r h5_pct h5_reset wk_pct wk_reset <<< "$result"
+    bucket "${h5_pct:-}" "${h5_reset:-}" 18000
+    h5_text=$BTEXT h5_json=$BJSON
+    bucket "${wk_pct:-}" "${wk_reset:-}" 604800
+    wk_text=$BTEXT wk_json=$BJSON
+    codex_text="Codex 5h ${h5_text} · wk ${wk_text}"
+    codex_json=$(printf '{"five_hour":%s,"week":%s}' "$h5_json" "$wk_json")
+  fi
+fi
+if [ "$prof_codex" != none ] && [ -z "$codex_text" ]; then
+  codex_text='Codex 5h – · wk –'
+  codex_json='{"five_hour":{"percent":null,"resets_epoch":null,"pace":null},"week":{"percent":null,"resets_epoch":null,"pace":null}}'
+fi
+
+# ---- Jules: `jules remote list --session`, daily limit 15 ------------
+jules_text='' jules_json='null'
+if [ "$prof_jules" = true ]; then
+  jules_text='Jules 24h –'
+  jules_json='{"used":null,"limit":null,"running":null,"concurrent_limit":null,"percent":null,"frees_at_epoch":null}'
+  jules_bin=$(command -v jules 2>/dev/null || true)
+  if [ -z "$jules_bin" ]; then
+    for candidate in /opt/homebrew/bin/jules /usr/local/bin/jules; do
+      if [ -x "$candidate" ]; then jules_bin=$candidate; break; fi
+    done
+  fi
+  if [ -n "$jules_bin" ]; then
+    # No coreutils `timeout` on a stock Mac: a hung jules must not hang the
+    # quota line (or the Paseo pill), so a watchdog kills it after 10 s.
+    jules_out=$(mktemp "${TMPDIR:-/tmp}/kit-quota-jules.XXXXXX")
+    "$jules_bin" remote list --session </dev/null >"$jules_out" 2>/dev/null &
+    jules_pid=$!
+    waited=0
+    while kill -0 "$jules_pid" 2>/dev/null && (( waited < ${KIT_JULES_TIMEOUT:-10} )); do
+      sleep 1; waited=$((waited + 1))
+    done
+    if kill -0 "$jules_pid" 2>/dev/null; then
+      kill "$jules_pid" 2>/dev/null; wait "$jules_pid" 2>/dev/null
+      : >"$jules_out"
+    else
+      wait "$jules_pid" 2>/dev/null
+    fi
+    list=$(cat "$jules_out"); rm -f "$jules_out"
+    if [ -n "$list" ]; then
+      seen_ids=() seen_times=()
+      if [ -f "$JULES_SEEN_FILE" ]; then
+        while IFS=$'\t' read -r sid sepoch; do
+          [[ -n $sid && $sepoch =~ ^[0-9]+$ ]] || continue
+          seen_ids+=("$sid") seen_times+=("$sepoch")
+        done < "$JULES_SEEN_FILE"
+      fi
+      used=0 running=0 oldest='' in_table=0 parse_ok=1
+      while IFS= read -r line; do
+        line=${line#"${line%%[![:space:]]*}"}
+        line=${line%"${line##*[![:space:]]}"}
+        [ -n "$line" ] || continue
+        if [[ $line == ID[[:space:]]* ]]; then in_table=1; continue; fi
+        (( in_table )) || continue
+        parsed=$(printf '%s\n' "$line" | awk -F '[[:space:]][[:space:]]+' 'NF >= 4 {print $1 "\t" $(NF-1) "\t" $NF}')
+        if [ -z "$parsed" ]; then parse_ok=0; break; fi
+        IFS=$'\t' read -r jid age status <<< "$parsed"
+        if [[ -z $jid || $age != *' ago' || -z $status ]]; then parse_ok=0; break; fi
+        age=${age% ago}
+        seconds=0
+        if [[ $age =~ ^([0-9]+)\ days?$ ]]; then
+          seconds=$((10#${BASH_REMATCH[1]} * 86400)); age=''
+        fi
+        ok=1
+        while [ -n "$age" ]; do
+          if [[ ! $age =~ ^([0-9]+)([wdhms]) ]]; then ok=0; break; fi
+          amount=${BASH_REMATCH[1]} unit=${BASH_REMATCH[2]}
+          case $unit in
+            w) mult=604800;; d) mult=86400;; h) mult=3600;; m) mult=60;; s) mult=1;;
+          esac
+          seconds=$((seconds + 10#$amount * mult))
+          age=${age#"${BASH_REMATCH[0]}"}
+        done
+        if [ "$ok" -ne 1 ]; then parse_ok=0; break; fi
+        first=$NOW found=0
+        for i in "${!seen_ids[@]}"; do
+          if [ "${seen_ids[$i]}" = "$jid" ]; then first=${seen_times[$i]}; found=1; break; fi
+        done
+        if (( ! found )); then seen_ids+=("$jid") seen_times+=("$NOW"); fi
+        estimate=$((NOW - seconds))
+        if (( first < estimate )); then estimate=$first; fi
+        if (( estimate > NOW - 86400 )); then
+          used=$((used + 1))
+          if [[ -z $oldest || $estimate -lt $oldest ]]; then oldest=$estimate; fi
+        fi
+        case $status in
+          Completed|Failed|Canceled|Cancelled) ;;
+          *) running=$((running + 1)) ;;
+        esac
+      done <<< "$list"
+      if [ "$in_table" -eq 1 ] && [ "$parse_ok" -eq 1 ]; then
+        mkdir -p "$KIT_HOME" 2>/dev/null
+        seen_tmp="$KIT_HOME/.jules-seen.tmp.$$"
+        for i in "${!seen_ids[@]}"; do printf '%s\t%s\n' "${seen_ids[$i]}" "${seen_times[$i]}"; done \
+          | sort > "$seen_tmp" 2>/dev/null
+        mv "$seen_tmp" "$JULES_SEEN_FILE" 2>/dev/null || rm -f "$seen_tmp"
+
+        jpct=$((used * 100 / JULES_DAILY_LIMIT))
+        jflag=''
+        if (( jpct >= 80 || running >= JULES_CONCURRENT_LIMIT )); then jflag=' !'; fi
+        jules_text="Jules 24h ${jpct}% (${used}/${JULES_DAILY_LIMIT}, ${running} running)${jflag}"
+        jfrees='null'
+        [ -n "$oldest" ] && jfrees=$((oldest + 86400))
+        jules_json=$(printf '{"used":%s,"limit":%s,"running":%s,"concurrent_limit":%s,"percent":%s,"frees_at_epoch":%s}' \
+          "$used" "$JULES_DAILY_LIMIT" "$running" "$JULES_CONCURRENT_LIMIT" "$jpct" "$jfrees")
+      fi
+    fi
+  fi
+fi
+
+# ---- Kimi/GLM: tokens and cost from the ledger since the 1st -----------
+ledger_summary() {
+  /usr/bin/python3 - "$KIT_HOME/ledger.tsv" "$(date +%Y-%m-01)" "$1" <<'PY'
+import csv, json, os, sys
+path, month, provider = sys.argv[1:]
+tokens, spend = 0, 0.0
+if os.path.isfile(path):
+    with open(path, newline='') as f:
+        for row in csv.DictReader(f, delimiter='\t'):
+            if row.get('lane') != 'locked-build' or row.get('date', '') < month:
+                continue
+            lane = row.get('provider') or (row.get('model') or '').split('-')[0].lower()
+            if lane != provider:
+                continue
+            a, b = row.get('in'), row.get('out')
+            if tokens is not None:
+                if a is not None and b is not None and a.isdecimal() and b.isdecimal():
+                    tokens += int(a) + int(b)
+                else:
+                    tokens = None
+            price = row.get('cost_usd')
+            if spend is not None:
+                try:
+                    spend += float(price) if price else float('nan')
+                    if not price or not (spend < float('inf')):
+                        spend = None
+                except (TypeError, ValueError):
+                    spend = None
+print(json.dumps({'spend_usd': round(spend, 6) if spend is not None else None,
+                  'tokens': tokens}))
+PY
+}
+
+ledger_display() {
+  /usr/bin/jq -r --arg name "$1" '
+    def money:
+      if . == null then "$–"
+      elif . == 0 then "$0.00"
+      elif . < 0.01 then "<$0.01"
+      else (. * 100 | round) as $cents
+        | ($cents / 100 | floor) as $dollars
+        | ($cents - ($dollars * 100)) as $rem
+        | "$" + ($dollars | tostring) + "." + (if $rem < 10 then "0" else "" end) + ($rem | tostring)
+      end;
+    $name + " " + (.spend_usd | money) +
+    " this month (" + (if .tokens == null then "–" elif .tokens >= 1000000 then ((.tokens / 1000000 * 10 | round) / 10 | tostring) + "M" elif .tokens >= 1000 then ((.tokens / 1000 * 10 | round) / 10 | tostring) + "K" else (.tokens | tostring) end) + " tok)"
+  '
+}
+
+kimi_text='' kimi_json='null'
+if [ "$prof_kimi" = true ]; then
+  kimi_json=$(ledger_summary kimi)
+  kimi_text=$(printf '%s' "$kimi_json" | ledger_display Kimi)
+fi
+
+glm_text='' glm_json='null'
+if [ "$prof_glm" = true ]; then
+  glm_json=$(ledger_summary glm)
+  glm_text=$(printf '%s' "$glm_json" | ledger_display GLM)
+fi
+
+# ---- assemble ----------------------------------------------------------
+if [ "$AS_JSON" -eq 1 ]; then
+  printf '{"claude":%s,"codex":%s,"jules":%s,"kimi":%s,"glm":%s}\n' \
+    "$claude_json" "$codex_json" "$jules_json" "$kimi_json" "$glm_json"
+else
+  line="$claude_text"
+  for seg in "$codex_text" "$jules_text" "$kimi_text" "$glm_text"; do
+    [ -n "$seg" ] && line="$line │ $seg"
+  done
+  printf '%s\n' "$line"
+fi
+exit 0

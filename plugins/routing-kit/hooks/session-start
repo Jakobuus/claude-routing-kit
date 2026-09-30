@@ -1,0 +1,76 @@
+#!/bin/bash
+# hooks/session-start — SessionStart hook. Prints RULES.md plus the
+# friend's routing table on plain stdout. Never blocks a session: on any
+# internal error it prints a repair line and exits 0.
+set -u
+
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$HOOK_DIR/.." && pwd -P)}"
+
+fail() {
+  echo "routing-kit: rules did not load ($1). Repair: claude plugin update routing-kit@routing-kit"
+  exit 0
+}
+
+# A session must never be blocked, even on the wrong OS: don't call
+# kit_require_macos (which exits 2). Check directly and exit 0 with a
+# single, exact line instead.
+case "$(uname)" in
+  Darwin) ;;
+  *)
+    echo "routing-kit is macOS-only; rules not loaded."
+    exit 0
+    ;;
+esac
+
+if [ ! -f "$PLUGIN_ROOT/bin/kit-common" ]; then
+  fail "bin/kit-common missing"
+fi
+# shellcheck disable=SC1090
+. "$PLUGIN_ROOT/bin/kit-common" || fail "kit-common did not load"
+
+PROFILE_PATH="$KIT_HOME/profile.json"
+
+if [ ! -f "$PROFILE_PATH" ]; then
+  echo "routing-kit is installed but not set up yet. Drop START-HERE.md into Claude to finish setup."
+  exit 0
+fi
+
+RULES_FILE="$PLUGIN_ROOT/rules/RULES.md"
+if [ ! -f "$RULES_FILE" ]; then
+  fail "rules/RULES.md missing"
+fi
+
+table=$("$PLUGIN_ROOT/bin/kit-routing-table" --profile "$PROFILE_PATH" 2>/dev/null)
+rc=$?
+if [ "$rc" -ne 0 ] || [ -z "$table" ]; then
+  fail "invalid profile"
+fi
+
+rules=$(/usr/bin/python3 - "$RULES_FILE" "$PROFILE_PATH" <<'PY'
+import json, re, sys
+with open(sys.argv[1]) as f:
+    rules = f.read()
+with open(sys.argv[2]) as f:
+    profile = json.load(f)
+for lane in ('codex', 'jules', 'kimi', 'glm'):
+    enabled = profile.get(lane) != 'none' if lane == 'codex' else profile.get(lane, False) is True
+    pattern = r'<!-- lane:' + lane + r' -->\n(.*?)<!-- /lane:' + lane + r' -->\n?'
+    rules = re.sub(pattern, lambda m: m.group(1) if enabled else '', rules, flags=re.S)
+print(rules.rstrip())
+PY
+) || fail "could not filter rules"
+
+output="$rules
+
+## Your routing table
+
+$table"
+
+len=${#output}
+if [ "$len" -gt 9000 ]; then
+  fail "output too large ($len chars)"
+fi
+
+printf '%s\n' "$output"
+exit 0

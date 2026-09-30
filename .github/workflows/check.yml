@@ -5,10 +5,22 @@ on:
   pull_request:
 
 jobs:
-  test:
+  test-macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Run tests
+        run: ./tests/run
+      - name: Privacy check
+        # CI has no maintainer private list; generic patterns still run.
+        run: ./scripts/privacy-check .
+
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
       - name: Run tests
         run: ./tests/run
       - name: Privacy check

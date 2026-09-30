@@ -84,9 +84,9 @@ code=$?
 assert_eq 0 "$code" "bare PATH run exits 0"
 assert_contains "$out" "## Your routing table" "bare PATH run still produces the table"
 
-# (f) non-macOS: a session must never be blocked. Put a fake `uname` that
-# prints Linux first on PATH; the hook must print exactly one line and
-# exit 0 (not exit 2 via kit_require_macos).
+# (f) Linux (and WSL2, which reports uname as Linux) is a supported system:
+# a fake `uname` that prints Linux must still produce the normal routing
+# table, not the old macOS-only refusal.
 d=$(mktmp)
 fakebin=$(mktmp)
 cat > "$fakebin/uname" <<'EOF'
@@ -98,8 +98,26 @@ mkdir -p "$d/.config/routing-kit"
 mkprofile "$d/.config/routing-kit/profile.json" pro none false false false false
 out=$(env PATH="$fakebin:$PATH" ROUTING_KIT_HOME="$d/.config/routing-kit" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
 code=$?
-assert_eq 0 "$code" "non-macOS hook exits 0"
-assert_eq "routing-kit is macOS-only; rules not loaded." "$out" "non-macOS hook prints the exact one-line message"
+assert_eq 0 "$code" "faked-Linux hook exits 0"
+assert_contains "$out" "## Your routing table" "faked-Linux hook still produces the table"
+
+# (g) native Windows (no WSL): a session must never be blocked either, but
+# it's not a supported system -- fake a MINGW64_NT-shaped uname (what
+# git-bash reports) and check the hook prints exactly the one-line
+# unsupported-system message and exits 0 (not exit 2).
+d=$(mktmp)
+winbin=$(mktmp)
+cat > "$winbin/uname" <<'EOF'
+#!/bin/bash
+echo "MINGW64_NT-10.0"
+EOF
+chmod +x "$winbin/uname"
+mkdir -p "$d/.config/routing-kit"
+mkprofile "$d/.config/routing-kit/profile.json" pro none false false false false
+out=$(env PATH="$winbin:$PATH" ROUTING_KIT_HOME="$d/.config/routing-kit" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
+code=$?
+assert_eq 0 "$code" "native-Windows hook exits 0"
+assert_eq "routing-kit needs macOS, Linux, or WSL2 on Windows; rules not loaded." "$out" "native-Windows hook prints the exact one-line message"
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

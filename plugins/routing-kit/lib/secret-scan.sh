@@ -3,7 +3,7 @@
 # bash 3.2 compatible: no mapfile, no ${x,,}, no associative arrays.
 #
 # Sourced by callers, not run directly. Depends on kit-common
-# (kit_require_macos, kit_die) and the shared patterns in secret_patterns.py
+# (kit_require_supported, kit_die) and the shared patterns in secret_patterns.py
 # (the same list scripts/privacy-check uses, so kinds don't drift apart).
 
 SCAN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -13,14 +13,14 @@ SCAN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # string, 5 on the first hit. Prints "file:line: kind" for every hit,
 # never the matched text itself.
 secret_scan() {
-  kit_require_macos
+  kit_require_supported
   local mode=full
   if [ "${1:-}" = --credentials-only ]; then mode=credentials; shift; fi
   if [ "$#" -eq 0 ]; then
     kit_die 2 "usage: secret_scan PATH..."
   fi
 
-  /usr/bin/python3 - "$SCAN_LIB_DIR" "$mode" "$@" <<'PYEOF'
+  kit_python3 - "$SCAN_LIB_DIR" "$mode" "$@" <<'PYEOF'
 import fnmatch
 import os
 import re

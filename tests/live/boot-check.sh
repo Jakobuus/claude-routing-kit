@@ -33,7 +33,7 @@ bad() {
 case "$(uname)" in
   Darwin) ;;
   *)
-    echo "boot-check.sh: macOS only, skipping" >&2
+    echo "SKIP: boot-check.sh needs macOS (real Seatbelt jail, real native Claude)" >&2
     echo "PASS 0 / FAIL 0"
     exit 0
     ;;

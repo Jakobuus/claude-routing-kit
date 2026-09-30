@@ -1,14 +1,26 @@
 #!/bin/bash
 # scripts/privacy-check [PATH] — refuses to let personal data ship in the
 # public repo. Exit 0 clean, 1 on a hit. Prints "file:line: pattern-name",
-# never the matched text. bash 3.2 / /usr/bin/python3 only.
+# never the matched text. bash 3.2 / python3 only. Runs on macOS and Linux
+# (this repo's CI runs it on both): stock macOS keeps python3 at
+# /usr/bin/python3; anywhere else it's resolved via PATH.
 set -u
 
 target="${1:-.}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PATTERNS_DIR="$SCRIPT_DIR/../plugins/routing-kit/lib"
 
-/usr/bin/python3 - "$target" "${ROUTING_KIT_PRIVATE_LIST:-$HOME/.config/routing-kit-dev/banned.txt}" "$PATTERNS_DIR" <<'PYEOF'
+if [ -x /usr/bin/python3 ]; then
+  PY3=/usr/bin/python3
+else
+  PY3="$(command -v python3 2>/dev/null || true)"
+fi
+if [ -z "$PY3" ]; then
+  echo "privacy-check: install python3 (sudo apt install python3)" >&2
+  exit 1
+fi
+
+"$PY3" - "$target" "${ROUTING_KIT_PRIVATE_LIST:-$HOME/.config/routing-kit-dev/banned.txt}" "$PATTERNS_DIR" <<'PYEOF'
 import os
 import sys
 
@@ -45,7 +57,7 @@ def iter_files(root):
         return
     for dirpath, dirnames, filenames in os.walk(root):
         # Skip VCS internals and installed npm packages (git-ignored, never shipped).
-        dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules")]
+        dirnames[:] = [d for d in dirnames if d not in (".git", "node_modules", "__pycache__")]
         for fn in filenames:
             if fn == ".git":
                 continue

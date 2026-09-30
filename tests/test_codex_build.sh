@@ -376,5 +376,63 @@ assert_contains "$out" "codex login" "Codex login failure gives command"
 printf '#!/bin/bash\necho "provider overloaded"\nexit 1\n' > "$authbin/codex"; chmod +x "$authbin/codex"
 assert_exit 4 "Codex provider failure exits 4" -- env PATH="$authbin:/usr/bin:/bin" ROUTING_KIT_HOME="$(mktmp)" "$BIN" --repo "$src" --name provider --brief "$brief"
 
+# --- Linux (and WSL2, which reports uname as Linux) is a supported system
+# now: a faked Linux uname must run the whole build normally, not refuse
+# the way it used to when the kit was macOS-only. --------------------------
+fakeuname=$(mktmp)
+cat > "$fakeuname/uname" <<'EOF'
+#!/bin/bash
+echo "Linux"
+EOF
+chmod +x "$fakeuname/uname"
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
+assert_exit 0 "codex build runs on a faked Linux uname" -- env PATH="$fakeuname:$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name linuxrun --brief "$brief"
+
+# Native Windows (no WSL) is not supported: a MINGW64_NT-shaped uname
+# refuses with the supported-systems message.
+winbin=$(mktmp)
+cat > "$winbin/uname" <<'EOF'
+#!/bin/bash
+echo "MINGW64_NT-10.0"
+EOF
+chmod +x "$winbin/uname"
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+out=$(env PATH="$winbin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" "$BIN" --repo "$src" --name winrun --brief "$brief" 2>&1)
+code=$?
+assert_eq 2 "$code" "codex build refuses on a faked native-Windows uname"
+assert_contains "$out" "routing-kit needs macOS, Linux, or WSL2 on Windows" "codex build prints the supported-systems message on native Windows"
+
+# --- a missing jq exits 3 with an install hint, not a masked "invalid
+# models file" (exit 2) -- KIT_TEST_NO_JQ forces "not found" the way a
+# genuinely jq-less host would resolve, since this dev Mac always has
+# /usr/bin/jq for real. -------------------------------------------------
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
+out=$(env KIT_TEST_NO_JQ=1 PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name nojqrun --brief "$brief" 2>&1)
+code=$?
+assert_eq 3 "$code" "codex build exits 3 when jq is missing"
+assert_contains "$out" "install jq" "codex build gives the install-jq hint, not a generic models-file error"
+
+# --- a missing python3 exits 3 with an install hint, not a false
+# "possible secret" refusal (exit 5) from the secret scan. -----------------
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
+out=$(env KIT_TEST_NO_PYTHON3=1 PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name nopy3run --brief "$brief" 2>&1)
+code=$?
+assert_eq 3 "$code" "codex build exits 3 when python3 is missing"
+assert_contains "$out" "install python3" "codex build gives the install-python3 hint, not a false secret-scan refusal"
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

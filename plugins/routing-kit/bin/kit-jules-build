@@ -26,7 +26,12 @@ set -uo pipefail
 
 BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 . "$BIN_DIR/kit-common"
-kit_require_macos
+kit_require_supported
+# Fail fast (exit 3, install hint) if jq/python3 are missing, before any
+# `x=$(kit_jq ...)` below that could otherwise mask the real problem behind
+# a generic failure or a false secret-scan refusal.
+kit_require_jq
+kit_require_python3
 . "$BIN_DIR/../lib/ledger.sh"
 . "$BIN_DIR/../lib/secret-scan.sh"
 
@@ -151,7 +156,7 @@ fi
 STARTED=$(date -u +%FT%TZ); ENDED='' SESSION='' STATUS='' PATCH_LINES=0 VERIFY_EXIT=''
 
 manifest() {
-  /usr/bin/jq -n --arg repo "$REPO" --arg owner_repo "$OWNER_REPO" --arg session_id "$SESSION" \
+  kit_jq -n --arg repo "$REPO" --arg owner_repo "$OWNER_REPO" --arg session_id "$SESSION" \
     --arg started "$STARTED" --arg ended "$ENDED" --arg final_status "$STATUS" \
     --argjson patch_lines "$PATCH_LINES" --arg verify_exit "$VERIFY_EXIT" \
     '{repo:$repo,owner_repo:$owner_repo,session_id:$session_id,started:$started,ended:$ended,final_status:$final_status,patch_lines:$patch_lines,verify_exit:(if $verify_exit=="" then null else ($verify_exit|tonumber) end)}' \

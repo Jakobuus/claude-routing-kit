@@ -461,5 +461,69 @@ assert_contains "$out" "jules login" "Jules login failure gives command"
 printf '#!/bin/bash\necho "provider overloaded"\nexit 1\n' > "$authbin/jules"; chmod +x "$authbin/jules"
 assert_exit 4 "Jules provider failure exits 4" -- env PATH="$authbin:/usr/bin:/bin" ROUTING_KIT_HOME="$(mktmp)" KIT_JULES_ALLOW_LOCAL_ORIGIN=1 KIT_JULES_REPO_SLUG=test/repo "$BIN" --repo "$src" --name provider --brief "$brief" --verify true
 
+# --- Linux (and WSL2, which reports uname as Linux) is a supported system
+# now: a faked Linux uname must run the whole build normally, not refuse
+# the way it used to when the kit was macOS-only. --------------------------
+fakeuname=$(mktmp)
+cat > "$fakeuname/uname" <<'EOF'
+#!/bin/bash
+echo "Linux"
+EOF
+chmod +x "$fakeuname/uname"
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+runs=$(mktmp); wts=$(mktmp)
+fakebin=$(mk_fake_jules_bin)
+assert_exit 0 "jules build runs on a faked Linux uname" -- env PATH="$fakeuname:$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  KIT_JULES_ALLOW_LOCAL_ORIGIN=1 KIT_JULES_REPO_SLUG=test/repo \
+  KIT_JULES_RUNS_DIR="$runs" KIT_JULES_WORKTREES_DIR="$wts" KIT_JULES_POLL_SECS=1 \
+  "$BIN" --repo "$src" --name linuxrun --brief "$brief" --verify "test -f hello.txt"
+
+# Native Windows (no WSL) is not supported: a MINGW64_NT-shaped uname
+# refuses with the supported-systems message.
+winbin=$(mktmp)
+cat > "$winbin/uname" <<'EOF'
+#!/bin/bash
+echo "MINGW64_NT-10.0"
+EOF
+chmod +x "$winbin/uname"
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+out=$(env PATH="$winbin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  KIT_JULES_ALLOW_LOCAL_ORIGIN=1 KIT_JULES_REPO_SLUG=test/repo \
+  "$BIN" --repo "$src" --name winrun --brief "$brief" --verify "true" 2>&1)
+code=$?
+assert_eq 2 "$code" "jules build refuses on a faked native-Windows uname"
+assert_contains "$out" "routing-kit needs macOS, Linux, or WSL2 on Windows" "jules build prints the supported-systems message on native Windows"
+
+# --- a missing jq exits 3 with an install hint. KIT_TEST_NO_JQ forces
+# "not found" the way a genuinely jq-less host would resolve, since this
+# dev Mac always has /usr/bin/jq for real. ---------------------------------
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+fakebin=$(mk_fake_jules_bin)
+out=$(env KIT_TEST_NO_JQ=1 PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  KIT_JULES_ALLOW_LOCAL_ORIGIN=1 KIT_JULES_REPO_SLUG=test/repo \
+  "$BIN" --repo "$src" --name nojqrun --brief "$brief" --verify "true" 2>&1)
+code=$?
+assert_eq 3 "$code" "jules build exits 3 when jq is missing"
+assert_contains "$out" "install jq" "jules build gives the install-jq hint"
+
+# --- a missing python3 exits 3 with an install hint, not a false
+# "possible secret" refusal (exit 5) from the secret scan. -----------------
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+fakebin=$(mk_fake_jules_bin)
+out=$(env KIT_TEST_NO_PYTHON3=1 PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  KIT_JULES_ALLOW_LOCAL_ORIGIN=1 KIT_JULES_REPO_SLUG=test/repo \
+  "$BIN" --repo "$src" --name nopy3run --brief "$brief" --verify "true" 2>&1)
+code=$?
+assert_eq 3 "$code" "jules build exits 3 when python3 is missing"
+assert_contains "$out" "install python3" "jules build gives the install-python3 hint, not a false secret-scan refusal"
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

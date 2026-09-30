@@ -8,14 +8,15 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 PLUGIN_ROOT="$REPO_ROOT/plugins/routing-kit"
 SELFTEST="$PLUGIN_ROOT/bin/kit-selftest"
 
-case "$(uname)" in
-  Darwin) ;;
-  *)
-    echo "test_selftest.sh: macOS only, skipping" >&2
-    echo "PASS 0 / FAIL 0"
-    exit 0
-    ;;
-esac
+# This file must pass on real macOS AND real Ubuntu (WSL2 reports uname as
+# Linux, so it rides the same path). The portable cases below (profile,
+# routing table, kit-quota, codex, jules) run for real on either host;
+# only the Seatbelt-jail-specific cases (kimi/glm via locked-build, and the
+# real canary suite) are macOS-only and get skipped -- explicitly, per
+# case, with a SKIP line -- on a real non-Darwin host, never by exiting
+# this whole file early the way it used to.
+ON_DARWIN=0
+[ "$(uname)" = Darwin ] && ON_DARWIN=1
 
 TEST_KEY="test-key-$$-$(date +%s)-$RANDOM"
 
@@ -120,9 +121,11 @@ code=$?
 assert_contains "$out" "profile: FAIL:" "no profile at all reports a FAIL on the profile line"
 assert_eq 2 "$code" "no profile exits 2"
 
-# --- 2. claude-only profile, no lanes on: profile/table/quota/canaries run,
-# no lane lines appear, canaries pass on a real sandbox-exec, all-clear
-# exits 0 (a KNOWN-GAP canary probe must not turn this into a failure) -----
+# --- 2. claude-only profile, no lanes on: profile/table/quota run for real
+# on either host; canaries run for real on a Mac (real sandbox-exec) and
+# print a plain SKIP on a real non-Darwin host instead. All-clear exits 0
+# either way (a KNOWN-GAP canary probe must not turn a real Mac run into a
+# failure, and a SKIP must not turn a real Linux run into one either). -----
 d=$(mktmp)
 write_profile "$d" none false false
 out=$(env ROUTING_KIT_HOME="$d" "$SELFTEST" 2>&1)
@@ -131,7 +134,12 @@ assert_eq 0 "$code" "claude-only profile, all real checks passing, exits 0"
 assert_contains "$out" "profile: ok" "profile check passes"
 assert_contains "$out" "routing table: ok" "routing table check passes"
 assert_contains "$out" "kit-quota: ok" "kit-quota check passes"
-assert_contains "$out" "canaries: ok" "canaries check passes"
+if [ "$ON_DARWIN" -eq 1 ]; then
+  assert_contains "$out" "canaries: ok" "canaries check passes on a real Mac"
+  assert_contains "$out" "WARN: KNOWN-GAP" "the accepted command-line-read gap is surfaced as a WARN line on a real Mac"
+else
+  assert_contains "$out" "canaries: SKIP (macOS only)" "canaries is a plain SKIP on this real, non-macOS host"
+fi
 case "$out" in
   *"codex:"*) fail "codex line appeared even though codex is off in the profile" ;;
   *) pass ;;
@@ -140,9 +148,8 @@ case "$out" in
   *"jules:"*) fail "jules line appeared even though jules is off in the profile" ;;
   *) pass ;;
 esac
-assert_contains "$out" "WARN: KNOWN-GAP" "the accepted command-line-read gap is surfaced as a WARN line"
 case "$out" in
-  *"FAIL"*) fail "a WARN-only run (known gap) must not print any FAIL line" ;;
+  *"FAIL"*) fail "a claude-only, all-clear run must not print any FAIL line" ;;
   *) pass ;;
 esac
 
@@ -201,6 +208,12 @@ out=$(env ROUTING_KIT_HOME="$d" PATH="$brokenjules:$PATH" "$SELFTEST" 2>&1)
 code=$?
 assert_contains "$out" "jules: FAIL:" "jules check fails when jules remote list fails"
 assert_eq 3 "$code" "broken jules exits 3"
+
+# --- 9-12: kimi/glm and the real canary suite only ever run inside the
+# macOS Seatbelt jail -- these cases need a real Mac and only run there.
+# The Linux-side behavior (a plain SKIP for each, still exit 0) is covered
+# for real in case 13 below, on whichever host actually runs this file. ----
+if [ "$ON_DARWIN" -eq 1 ]; then
 
 # --- 9. kimi on, everything faked through locked-build's own hooks: ok ------
 d=$(mktmp)
@@ -265,6 +278,53 @@ out=$(env ROUTING_KIT_HOME="$d" PATH="$codexbin:$julesbin:$PATH" \
 code=$?
 assert_eq 5 "$code" "a simulated ~/.ssh leak makes kit-selftest exit 5"
 assert_contains "$out" "canaries: FAIL: the Kimi/GLM sandbox did not hold" "the canary failure gives a plain fix line"
+
+fi # ON_DARWIN (cases 9-12)
+
+
+# --- 13. what a real Linux/WSL2 friend would see: profile/routing-table/
+# quota/codex/jules all still run for real (they're portable now), but
+# kimi, glm and the canary suite -- all Seatbelt-jail-only -- print a plain
+# SKIP line instead of trying to build a jail that doesn't exist there.
+# Even with kimi written true directly into profile.json (bypassing
+# kit-profile's own off-Mac refusal), the SKIP still wins over trying to
+# run locked-build. Overall exit is 0: no lane actually failed.
+#
+# On a real non-Darwin host (Ubuntu CI) this runs directly against the
+# real uname -- genuine Linux coverage, not a fake. On a real Mac, it
+# fakes uname via PATH instead, the same technique the rest of this suite
+# already uses for its other "non-macOS" cases, since there's no real
+# Linux box to prove it against here. ---------------------------------------
+if [ "$ON_DARWIN" -eq 1 ]; then
+  fakeuname=$(mktmp)
+  cat > "$fakeuname/uname" <<'EOF'
+#!/bin/bash
+echo "Linux"
+EOF
+  chmod +x "$fakeuname/uname"
+  test13_path="$fakeuname:$PATH"
+else
+  test13_path="$PATH"
+fi
+d=$(mktmp)
+write_profile "$d" plus true true
+codexbin=$(mk_fake_codex_ok)
+julesbin=$(mk_fake_jules_ok)
+out=$(env ROUTING_KIT_HOME="$d" PATH="$codexbin:$julesbin:$test13_path" "$SELFTEST" 2>&1)
+code=$?
+assert_eq 0 "$code" "non-macOS (real or faked) kit-selftest exits 0 (codex/jules ok, kimi/canaries just skip)"
+assert_contains "$out" "profile: ok" "non-macOS (real or faked) run: profile check still runs for real"
+assert_contains "$out" "routing table: ok" "non-macOS (real or faked) run: routing table check still runs for real"
+assert_contains "$out" "kit-quota: ok" "non-macOS (real or faked) run: kit-quota check still runs for real"
+assert_contains "$out" "codex: ok" "non-macOS (real or faked) run: codex check still runs for real"
+assert_contains "$out" "jules: ok" "non-macOS (real or faked) run: jules check still runs for real"
+assert_contains "$out" "kimi: SKIP (macOS only)" "non-macOS (real or faked) run: kimi is a plain SKIP, not attempted"
+assert_contains "$out" "glm: SKIP (macOS only)" "non-macOS (real or faked) run: glm is a plain SKIP, not attempted"
+assert_contains "$out" "canaries: SKIP (macOS only)" "non-macOS (real or faked) run: canaries is a plain SKIP, not attempted"
+case "$out" in
+  *"FAIL"*) fail "a non-macOS run with only portable lanes on must not print any FAIL line" ;;
+  *) pass ;;
+esac
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

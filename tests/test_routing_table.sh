@@ -17,7 +17,17 @@ assert_contains "$t" "Codex gpt-6-luna · Claude haiku" "lookups"
 
 mk pro plus true true false; t=$("$RT" --profile "$p/profile.json")
 assert_contains "$t" "kit-jules-build" "jules row"
-assert_contains "$t" "locked-build --provider kimi" "kimi row"
+# Kimi/GLM are macOS-only (the Seatbelt jail): the row only appears on a
+# real Mac, even for a profile that says kimi true. This file must pass on
+# real macOS AND real Ubuntu, so the expectation follows the real host.
+if [ "$(uname)" = Darwin ]; then
+  assert_contains "$t" "locked-build --provider kimi" "kimi row on a real Mac"
+else
+  case "$t" in
+    *"provider kimi"*) fail "kimi row appeared on this real, non-macOS host" ;;
+    *) pass ;;
+  esac
+fi
 case "$t" in *"provider glm"*) fail "glm not chosen";; esac
 
 echo '{"version":1,"claude_plan":"bogus"}' > "$p/profile.json"
@@ -63,13 +73,35 @@ for plan in pro max5 max20 team api; do
   done
 done
 
-# Model identifiers belong to models.json and tests only.
+# Model identifiers belong to models.json and tests only (README.md shows a dated example table).
 ids=$(/usr/bin/jq -r '[.claude, .codex, .kimi, .glm] | map(.strong?, .build?, .lookup?) | .[] | select(type == "string")' "$(dirname "$RT")/../rules/models.json" | sort -u)
 for id in $ids; do
-  if git -C "$REPO_ROOT" grep -l -F -w -- "$id" -- . ':!tests' ':!plugins/routing-kit/rules/models.json' | grep -q .; then
+  if git -C "$REPO_ROOT" grep -l -F -w -- "$id" -- . ':!tests' ':!plugins/routing-kit/rules/models.json' ':!README.md' | grep -q .; then
     fail "model id outside models.json: $id"
   else pass; fi
 done
+
+# Kimi/GLM are macOS-only (the Seatbelt jail): on a faked Linux uname the
+# row must never appear, even for a profile that says kimi/glm true (a
+# hand-edited profile.json, since kit-profile itself refuses to set either
+# true off-Mac).
+fakebin=$(mktmp)
+cat > "$fakebin/uname" <<'EOF'
+#!/bin/bash
+echo "Linux"
+EOF
+chmod +x "$fakebin/uname"
+mk pro plus true true true
+t=$(env PATH="$fakebin:$PATH" "$RT" --profile "$p/profile.json")
+case "$t" in
+  *"provider kimi"*) fail "kimi row leaked on a faked Linux uname" ;;
+  *) pass ;;
+esac
+case "$t" in
+  *"provider glm"*) fail "glm row leaked on a faked Linux uname" ;;
+  *) pass ;;
+esac
+assert_contains "$t" "kit-jules-build" "jules row still appears on a faked Linux uname"
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

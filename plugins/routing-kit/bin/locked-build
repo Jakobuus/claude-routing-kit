@@ -16,7 +16,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 . "$SCRIPT_DIR/kit-common"
-kit_require_macos
+kit_require_kimi_glm_macos
 
 LIB_DIR="$(cd "$SCRIPT_DIR/../lib" && pwd -P)"
 RULES_JSON="$(cd "$SCRIPT_DIR/../rules" && pwd -P)/models.json"

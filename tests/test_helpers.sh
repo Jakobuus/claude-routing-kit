@@ -196,8 +196,9 @@ else
   pass
 fi
 
-# --- ledger_append: must refuse on non-macOS instead of silently writing the
-# ledger anyway (every routing-kit entry point needs this guard) --------------
+# --- ledger_append: Linux (and WSL2, which reports uname as Linux) is a
+# supported system now -- it must write the ledger line normally, not
+# refuse the way it used to when the whole kit was macOS-only. ---------------
 fakebin=$(mktmp)
 cat > "$fakebin/uname" <<'EOF'
 #!/bin/bash
@@ -207,10 +208,29 @@ chmod +x "$fakebin/uname"
 home=$(mktmp)
 out=$(env PATH="$fakebin:$PATH" ROUTING_KIT_HOME="$home" bash -c ". \"$LEDGER_SH\"; ledger_append lane model name 1 2 0" 2>&1)
 code=$?
-assert_eq 2 "$code" "ledger_append refuses on non-macOS"
-assert_contains "$out" "routing-kit is macOS-only" "ledger_append prints the macOS-only message"
+assert_eq 0 "$code" "ledger_append works on a faked Linux uname"
 if [ -f "$home/ledger.tsv" ]; then
-  fail "ledger_append wrote ledger.tsv despite the non-macOS refusal"
+  pass
+else
+  fail "ledger_append did not write ledger.tsv on a faked Linux uname"
+fi
+
+# --- ledger_append: must still refuse on an unsupported system (native
+# Windows, faked here via a MINGW64_NT-shaped uname) instead of silently
+# writing the ledger anyway. --------------------------------------------------
+winbin=$(mktmp)
+cat > "$winbin/uname" <<'EOF'
+#!/bin/bash
+echo "MINGW64_NT-10.0"
+EOF
+chmod +x "$winbin/uname"
+winhome=$(mktmp)
+out=$(env PATH="$winbin:$PATH" ROUTING_KIT_HOME="$winhome" bash -c ". \"$LEDGER_SH\"; ledger_append lane model name 1 2 0" 2>&1)
+code=$?
+assert_eq 2 "$code" "ledger_append refuses on a faked native-Windows uname"
+assert_contains "$out" "routing-kit needs macOS, Linux, or WSL2 on Windows" "ledger_append prints the supported-systems message"
+if [ -f "$winhome/ledger.tsv" ]; then
+  fail "ledger_append wrote ledger.tsv despite the unsupported-system refusal"
 else
   pass
 fi

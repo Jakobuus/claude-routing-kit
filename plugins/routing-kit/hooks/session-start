@@ -12,13 +12,15 @@ fail() {
   exit 0
 }
 
-# A session must never be blocked, even on the wrong OS: don't call
-# kit_require_macos (which exits 2). Check directly and exit 0 with a
-# single, exact line instead.
+# A session must never be blocked, even on an unsupported OS: don't call
+# kit_require_supported (which exits 2). Check directly and exit 0 with a
+# single, exact line instead. Darwin and Linux (including WSL2, which
+# reports uname as Linux) are supported; anything else (native Windows'
+# MINGW/MSYS/CYGWIN uname, or anything unrecognized) is not.
 case "$(uname)" in
-  Darwin) ;;
+  Darwin|Linux) ;;
   *)
-    echo "routing-kit is macOS-only; rules not loaded."
+    echo "routing-kit needs macOS, Linux, or WSL2 on Windows; rules not loaded."
     exit 0
     ;;
 esac
@@ -28,6 +30,13 @@ if [ ! -f "$PLUGIN_ROOT/bin/kit-common" ]; then
 fi
 # shellcheck disable=SC1090
 . "$PLUGIN_ROOT/bin/kit-common" || fail "kit-common did not load"
+
+# python3 is needed below to filter RULES.md by lane. Check it directly
+# here (not via a `$(kit_python3 ...)` command substitution further down,
+# whose exit code would just fall into the generic "could not filter
+# rules" case) so a friend missing python3 gets told exactly that, still
+# through this hook's own never-block, always-exit-0 contract.
+[ -n "$KIT_PYTHON3_BIN" ] || fail "python3 missing"
 
 PROFILE_PATH="$KIT_HOME/profile.json"
 
@@ -47,7 +56,7 @@ if [ "$rc" -ne 0 ] || [ -z "$table" ]; then
   fail "invalid profile"
 fi
 
-rules=$(/usr/bin/python3 - "$RULES_FILE" "$PROFILE_PATH" <<'PY'
+rules=$(kit_python3 - "$RULES_FILE" "$PROFILE_PATH" <<'PY'
 import json, re, sys
 with open(sys.argv[1]) as f:
     rules = f.read()

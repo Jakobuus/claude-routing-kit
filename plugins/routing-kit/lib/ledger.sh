@@ -19,7 +19,7 @@ _ledger_sanitize() {
 ledger_model_cost() {
   local models_file="$1" model="$2" input_count="$3" output_count="$4"
   [[ $input_count =~ ^[0-9]+$ && $output_count =~ ^[0-9]+$ ]] || return 0
-  /usr/bin/jq -r --arg model "$model" --argjson input_count "$input_count" --argjson output_count "$output_count" '
+  kit_jq -r --arg model "$model" --argjson input_count "$input_count" --argjson output_count "$output_count" '
     .pricing[$model] as $p |
     if ($p.price_in_per_mtok | type) == "number" and ($p.price_out_per_mtok | type) == "number"
     then (($input_count * $p.price_in_per_mtok + $output_count * $p.price_out_per_mtok) / 1000000 | tostring)
@@ -32,7 +32,7 @@ ledger_model_cost() {
 # trailing fields become "-". Writes the header once.
 ledger_append() {
   local lane model name in_tokens out_tokens exit_code provider cost_usd ledger_path date_str
-  kit_require_macos
+  kit_require_supported
   lane="$(_ledger_sanitize "${1:--}")"
   model="$(_ledger_sanitize "${2:--}")"
   name="$(_ledger_sanitize "${3:--}")"

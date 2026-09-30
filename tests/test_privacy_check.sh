@@ -66,5 +66,10 @@ assert_exit 0 "allowed exact text passes" -- env ROUTING_KIT_PRIVATE_LIST="$pa/b
 printf 'mail secretowner about it\n' > "$da/bad.md"
 assert_exit 1 "the term elsewhere is still caught" -- env ROUTING_KIT_PRIVATE_LIST="$pa/banned.txt" "$PC" "$da"
 
+# Python cache folders (never committed) are skipped.
+dpc=$(mktmp); mkdir -p "$dpc/lib/__pycache__"
+printf 'someone''@example.org\n' > "$dpc/lib/__pycache__/x.cpython-312.pyc"
+assert_exit 0 "__pycache__ is skipped" -- "$PC" "$dpc"
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

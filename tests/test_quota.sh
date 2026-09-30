@@ -199,7 +199,9 @@ took=$(( $(date +%s) - start ))
 assert_contains "$out" "Jules 24h –" "a hung jules shows as unknown"
 (( took < 10 )) && pass || fail "a hung jules is killed within the timeout (took ${took}s)"
 
-# ---- non-macOS: kit-quota exits 2 -------------------------------------
+# ---- Linux (and WSL2, which reports uname as Linux) is supported: kit-quota
+# must run normally, not refuse the way it used to when the kit was
+# macOS-only. -------------------------------------------------------------
 d12=$(mktmp)
 fakebin=$(mktmp)
 cat > "$fakebin/uname" <<'EOF'
@@ -208,7 +210,33 @@ echo "Linux"
 EOF
 chmod +x "$fakebin/uname"
 mkprofile "$d12/profile.json" none false false false
-assert_exit 2 "kit-quota refuses on non-macOS" -- env PATH="$fakebin:$PATH" ROUTING_KIT_HOME="$d12" "$QUOTA"
+assert_exit 0 "kit-quota runs on a faked Linux uname" -- env PATH="$fakebin:$PATH" ROUTING_KIT_HOME="$d12" "$QUOTA"
+
+# ---- native Windows (no WSL, faked via a MINGW64_NT-shaped uname): still
+# not a supported system, so kit-quota refuses with the supported-systems
+# message. ------------------------------------------------------------------
+d13=$(mktmp)
+winbin=$(mktmp)
+cat > "$winbin/uname" <<'EOF'
+#!/bin/bash
+echo "MINGW64_NT-10.0"
+EOF
+chmod +x "$winbin/uname"
+mkprofile "$d13/profile.json" none false false false
+out=$(env PATH="$winbin:$PATH" ROUTING_KIT_HOME="$d13" "$QUOTA" 2>&1)
+code=$?
+assert_eq 2 "$code" "kit-quota refuses on a faked native-Windows uname"
+assert_contains "$out" "routing-kit needs macOS, Linux, or WSL2 on Windows" "kit-quota prints the supported-systems message"
+
+# ---- a missing jq exits 3 with an install hint, not a silent all-"–"
+# dashboard. KIT_TEST_NO_JQ forces "not found" the way a genuinely jq-less
+# host would resolve, since this dev Mac always has /usr/bin/jq for real. --
+d14=$(mktmp)
+mkprofile "$d14/profile.json" none false false false
+out=$(env KIT_TEST_NO_JQ=1 ROUTING_KIT_HOME="$d14" "$QUOTA" 2>&1)
+code=$?
+assert_eq 3 "$code" "kit-quota exits 3 when jq is missing"
+assert_contains "$out" "install jq" "kit-quota gives the install-jq hint, not a blank dashboard"
 
 
 # ---- kit-statusline install/uninstall: fake HOME only, never the real

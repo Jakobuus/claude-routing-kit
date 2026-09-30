@@ -14,7 +14,10 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 . "$SCRIPT_DIR/kit-common"
-kit_require_macos
+kit_require_supported
+# jq is essential here: fail fast (exit 3, install hint) rather than
+# letting a `x=$(kit_jq ...)` below mask the real problem.
+kit_require_jq
 
 # `kit-statusline install|uninstall` manage the stable shim described
 # below, plus Claude Code's settings.json and the saved previous state. Every
@@ -38,11 +41,11 @@ jq_write_atomic() {
   else
     base='{}'
   fi
-  echo "$base" | /usr/bin/jq -e . >/dev/null 2>&1 \
+  echo "$base" | kit_jq -e . >/dev/null 2>&1 \
     || kit_die 2 "not valid JSON, refusing to touch it: $path"
   mkdir -p "$(dirname "$path")" || kit_die 2 "could not create $(dirname "$path")"
   tmp="$path.tmp.$$"
-  if ! echo "$base" | /usr/bin/jq "$@" "$filter" > "$tmp" 2>/dev/null; then
+  if ! echo "$base" | kit_jq "$@" "$filter" > "$tmp" 2>/dev/null; then
     rm -f "$tmp"
     kit_die 2 "could not update $path"
   fi
@@ -68,9 +71,14 @@ set -u
 EOF
   printf 'CLAUDE_CONFIG_DIR=%q\nexport CLAUDE_CONFIG_DIR\n' "$CLAUDE_DIR" >> "$tmp"
   cat >> "$tmp" <<'EOF'
+# BSD stat (macOS) takes `-f '%m'`; GNU stat (Linux/WSL2) takes `-c '%Y'`.
+case "$(uname)" in
+  Darwin) shim_stat_mtime() { stat -f '%m' "$1" 2>/dev/null; } ;;
+  *) shim_stat_mtime() { stat -c '%Y' "$1" 2>/dev/null; } ;;
+esac
 newest='' newest_mtime=-1
 while IFS= read -r -d '' f; do
-  mtime=$(stat -f '%m' "$f" 2>/dev/null) || continue
+  mtime=$(shim_stat_mtime "$f") || continue
   if [ "$mtime" -gt "$newest_mtime" ]; then
     newest_mtime="$mtime"
     newest="$f"
@@ -99,8 +107,8 @@ cmd_install() {
   local current_cmd previous_json
   migrate_previous
   if [ -f "$SETTINGS_PATH" ]; then
-    current_cmd=$(/usr/bin/jq -r '.statusLine.command // empty' "$SETTINGS_PATH" 2>/dev/null)
-    previous_json=$(/usr/bin/jq -c '.statusLine // empty' "$SETTINGS_PATH" 2>/dev/null)
+    current_cmd=$(kit_jq -r '.statusLine.command // empty' "$SETTINGS_PATH" 2>/dev/null)
+    previous_json=$(kit_jq -c '.statusLine // empty' "$SETTINGS_PATH" 2>/dev/null)
   else
     current_cmd=''
     previous_json=''
@@ -118,13 +126,13 @@ cmd_uninstall() {
   local prev='' prev_json=''
   migrate_previous
   if [ -f "$PREVIOUS_PATH" ]; then
-    prev=$(/usr/bin/jq -r '.previous_statusline // empty' "$PREVIOUS_PATH" 2>/dev/null)
-    prev_json=$(/usr/bin/jq -c '.previous_statusline_json | select(type == "object")' "$PREVIOUS_PATH" 2>/dev/null)
+    prev=$(kit_jq -r '.previous_statusline // empty' "$PREVIOUS_PATH" 2>/dev/null)
+    prev_json=$(kit_jq -c '.previous_statusline_json | select(type == "object")' "$PREVIOUS_PATH" 2>/dev/null)
   fi
 
   local current_cmd=''
   if [ -f "$SETTINGS_PATH" ]; then
-    current_cmd=$(/usr/bin/jq -r '.statusLine.command // empty' "$SETTINGS_PATH" 2>/dev/null)
+    current_cmd=$(kit_jq -r '.statusLine.command // empty' "$SETTINGS_PATH" 2>/dev/null)
   fi
   if [ "$current_cmd" = "$SHIM_PATH" ]; then
     if [ -n "$prev_json" ]; then
@@ -144,9 +152,9 @@ cmd_uninstall() {
 migrate_previous() {
   [ -f "$PROFILE_PATH_FOR_INSTALL" ] || return 0
   local legacy_json legacy_cmd legacy_present
-  legacy_json=$(/usr/bin/jq -c '.previous_statusline_json | select(type == "object")' "$PROFILE_PATH_FOR_INSTALL" 2>/dev/null)
-  legacy_cmd=$(/usr/bin/jq -r '.previous_statusline // empty' "$PROFILE_PATH_FOR_INSTALL" 2>/dev/null)
-  legacy_present=$(/usr/bin/jq -r 'has("previous_statusline") or has("previous_statusline_json")' "$PROFILE_PATH_FOR_INSTALL" 2>/dev/null)
+  legacy_json=$(kit_jq -c '.previous_statusline_json | select(type == "object")' "$PROFILE_PATH_FOR_INSTALL" 2>/dev/null)
+  legacy_cmd=$(kit_jq -r '.previous_statusline // empty' "$PROFILE_PATH_FOR_INSTALL" 2>/dev/null)
+  legacy_present=$(kit_jq -r 'has("previous_statusline") or has("previous_statusline_json")' "$PROFILE_PATH_FOR_INSTALL" 2>/dev/null)
   if [ ! -f "$PREVIOUS_PATH" ]; then
     if [ -n "$legacy_json" ]; then
       jq_write_atomic "$PREVIOUS_PATH" '.previous_statusline_json = $p' --argjson p "$legacy_json"
@@ -170,9 +178,9 @@ LIMITS_PATH="$KIT_HOME/claude-limits.json"
 
 # rate_limits is absent for non-subscription accounts and before the first
 # API response of a session -- leave any previously saved file untouched.
-rl=$(printf '%s' "$input" | /usr/bin/jq -c '.rate_limits // empty' 2>/dev/null)
+rl=$(printf '%s' "$input" | kit_jq -c '.rate_limits // empty' 2>/dev/null)
 if [ -n "$rl" ] && [ "$rl" != "null" ]; then
-  out=$(printf '%s' "$rl" | /usr/bin/jq -c --argjson sampled "$(date +%s)" \
+  out=$(printf '%s' "$rl" | kit_jq -c --argjson sampled "$(date +%s)" \
     '{five_hour: (.five_hour // null), seven_day: (.seven_day // null), sampled: $sampled}' 2>/dev/null)
   if [ -n "$out" ]; then
     mkdir -p "$KIT_HOME" 2>/dev/null
@@ -188,7 +196,7 @@ fi
 # Chain to the friend's previous statusline command, stored (by the
 # installer, not by kit-profile -- it's a free-form string, not one of
 # kit-profile's enumerated keys) in statusline-previous.json.
-prev=$(/usr/bin/jq -r 'if (.previous_statusline_json | type) == "object" then .previous_statusline_json.command // empty else .previous_statusline // empty end' "$PREVIOUS_PATH" 2>/dev/null)
+prev=$(kit_jq -r 'if (.previous_statusline_json | type) == "object" then .previous_statusline_json.command // empty else .previous_statusline // empty end' "$PREVIOUS_PATH" 2>/dev/null)
 
 if [ -n "$prev" ]; then
   printf '%s' "$input" | bash -c "$prev"

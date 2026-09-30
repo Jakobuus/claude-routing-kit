@@ -12,6 +12,108 @@ kit_require_macos() {
   esac
 }
 
+# kit_require_supported — the non-jail gate: macOS, Linux, or WSL2 on
+# Windows (which reports its uname as Linux). Native Windows (MINGW/MSYS/
+# CYGWIN uname, e.g. git-bash) and anything else is refused.
+kit_require_supported() {
+  case "$(uname)" in
+    Darwin|Linux) ;;
+    *)
+      echo "routing-kit needs macOS, Linux, or WSL2 on Windows" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# kit_require_kimi_glm_macos — Kimi and GLM (locked-build's Seatbelt jail)
+# only ever run on a real Mac, even though the rest of the kit now runs on
+# Linux/WSL2 too. A distinct message from kit_require_macos's, since a
+# friend on Linux needs to know this is about Kimi/GLM specifically, not
+# that the whole kit is unavailable to them.
+kit_require_kimi_glm_macos() {
+  case "$(uname)" in
+    Darwin) ;;
+    *)
+      echo "Kimi and GLM need a Mac: they only run inside the macOS sandbox" >&2
+      exit 2
+      ;;
+  esac
+}
+
+# kit_resolve_tools — picks the jq/python3 binaries kit_jq/kit_python3 use.
+# Stock macOS keeps /usr/bin/jq and /usr/bin/python3 (the global brief's
+# assumed baseline); anywhere else (Linux, WSL2) resolves via PATH instead,
+# since those stock paths don't exist there. Run once, at source time, so
+# every caller shares the same resolution without re-running `command -v`
+# per call.
+KIT_JQ_BIN=""
+KIT_PYTHON3_BIN=""
+kit_resolve_tools() {
+  # KIT_TEST_NO_JQ / KIT_TEST_NO_PYTHON3: test-only overrides that force
+  # "not found", the same way KIT_KEYCHAIN_CMD etc. let tests fake other
+  # parts of this kit -- this dev Mac, like stock macOS, always has
+  # /usr/bin/jq and /usr/bin/python3, so a test proving the public
+  # commands' missing-dependency behavior (exit 3, install hint) can't
+  # rely on either one actually being absent.
+  if [ -n "${KIT_TEST_NO_JQ:-}" ]; then
+    KIT_JQ_BIN=""
+  elif [ -x /usr/bin/jq ]; then
+    KIT_JQ_BIN=/usr/bin/jq
+  else
+    KIT_JQ_BIN="$(command -v jq 2>/dev/null || true)"
+  fi
+  if [ -n "${KIT_TEST_NO_PYTHON3:-}" ]; then
+    KIT_PYTHON3_BIN=""
+  elif [ -x /usr/bin/python3 ]; then
+    KIT_PYTHON3_BIN=/usr/bin/python3
+  else
+    KIT_PYTHON3_BIN="$(command -v python3 2>/dev/null || true)"
+  fi
+}
+kit_resolve_tools
+
+# kit_require_jq / kit_require_python3 — exit 3 with an install hint right
+# now, in the CALLER'S OWN SHELL, if kit_resolve_tools couldn't find the
+# tool (only possible off macOS: kit_resolve_tools always finds macOS's
+# stock /usr/bin/jq and /usr/bin/python3). A script that depends on jq/
+# python3 to do anything useful should call these directly, as their own
+# statement, before any `x=$(kit_jq ...)` command substitution that
+# depends on the tool: kit_die's `exit` inside a `$(...)` subshell only
+# ends that subshell, so a caller that then does
+# `x=$(kit_jq ...) || kit_die 2 "some other, wrong reason"` would see its
+# own generic fallback instead of jq's real exit 3 and install hint --
+# the failure gets reported as the wrong problem, with the wrong exit code.
+kit_require_jq() {
+  [ -n "$KIT_JQ_BIN" ] || kit_die 3 "install jq (sudo apt install jq)"
+}
+kit_require_python3() {
+  [ -n "$KIT_PYTHON3_BIN" ] || kit_die 3 "install python3 (sudo apt install python3)"
+}
+
+# kit_jq ARGS... — jq, wherever it was resolved to. Exit 3 with an install
+# hint if this system has none. Safe to call directly; inside a `$(...)`
+# command substitution, prefer calling kit_require_jq first, as its own
+# statement in the parent shell (see above).
+kit_jq() {
+  kit_require_jq
+  "$KIT_JQ_BIN" "$@"
+}
+
+# kit_python3 ARGS... — same idea as kit_jq, for python3.
+kit_python3() {
+  kit_require_python3
+  "$KIT_PYTHON3_BIN" "$@"
+}
+
+# kit_mtime FILE — FILE's mtime as epoch seconds, or empty on error. BSD
+# stat (macOS) takes `-f '%m'`; GNU stat (Linux) takes `-c '%Y'`.
+kit_mtime() {
+  case "$(uname)" in
+    Darwin) stat -f '%m' "$1" 2>/dev/null ;;
+    *) stat -c '%Y' "$1" 2>/dev/null ;;
+  esac
+}
+
 # kit_die CODE MSG — print MSG to stderr and exit CODE.
 kit_die() {
   code="$1"; shift

@@ -5,7 +5,10 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 . "$SCRIPT_DIR/kit-common"
-kit_require_macos
+kit_require_supported
+# jq is essential here: fail fast (exit 3, install hint) rather than
+# letting a `x=$(kit_jq ...)` below mask the real problem.
+kit_require_jq
 
 PROFILE_PATH="$KIT_HOME/profile.json"
 
@@ -38,6 +41,13 @@ cmd_set() {
   if ! valid_value "$key" "$value"; then
     kit_die 2 "invalid value for $key: value not allowed"
   fi
+  case "$key" in
+    kimi|glm)
+      if [ "$value" = true ] && [ "$(uname)" != Darwin ]; then
+        kit_die 2 "Kimi and GLM need a Mac: they only run inside the macOS sandbox"
+      fi
+      ;;
+  esac
   mkdir -p "$KIT_HOME"
   if [ -f "$PROFILE_PATH" ]; then
     base=$(cat "$PROFILE_PATH")
@@ -47,10 +57,10 @@ cmd_set() {
   tmp="$KIT_HOME/profile.json.tmp.$$"
   case "$key" in
     jules|kimi|glm|paseo|version|jules_daily_limit)
-      echo "$base" | /usr/bin/jq --arg k "$key" --argjson v "$value" '.[$k] = $v' > "$tmp" || { rm -f "$tmp"; kit_die 2 "could not write profile"; }
+      echo "$base" | kit_jq --arg k "$key" --argjson v "$value" '.[$k] = $v' > "$tmp" || { rm -f "$tmp"; kit_die 2 "could not write profile"; }
       ;;
     *)
-      echo "$base" | /usr/bin/jq --arg k "$key" --arg v "$value" '.[$k] = $v' > "$tmp" || { rm -f "$tmp"; kit_die 2 "could not write profile"; }
+      echo "$base" | kit_jq --arg k "$key" --arg v "$value" '.[$k] = $v' > "$tmp" || { rm -f "$tmp"; kit_die 2 "could not write profile"; }
       ;;
   esac
   mv "$tmp" "$PROFILE_PATH" || { rm -f "$tmp"; kit_die 2 "could not save profile"; }
@@ -60,7 +70,7 @@ cmd_validate() {
   if [ ! -f "$PROFILE_PATH" ]; then
     exit 2
   fi
-  /usr/bin/jq -e '
+  kit_jq -e '
     (.version == 1) and
     ((.claude_plan // "") as $c | ["pro","max5","max20","team","api"] | index($c) != null) and
     ((if .codex == null then "none" else .codex end) as $c |

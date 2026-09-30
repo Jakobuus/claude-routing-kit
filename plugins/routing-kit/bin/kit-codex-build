@@ -16,7 +16,12 @@ set -uo pipefail
 
 BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 . "$BIN_DIR/kit-common"
-kit_require_macos
+kit_require_supported
+# Fail fast (exit 3, install hint) if jq/python3 are missing, before any
+# `x=$(kit_jq ...)` below that could otherwise mask the real problem behind
+# a generic "invalid models file" or a false secret-scan refusal.
+kit_require_jq
+kit_require_python3
 . "$BIN_DIR/../lib/export.sh"
 . "$BIN_DIR/../lib/ledger.sh"
 . "$BIN_DIR/../lib/secret-scan.sh"
@@ -75,7 +80,7 @@ on_exit() {
 trap on_exit EXIT
 
 if [ -z "$MODEL" ]; then
-  MODEL=$(/usr/bin/jq -e -r '.codex.build' "$MODELS_FILE" 2>/dev/null) \
+  MODEL=$(kit_jq -e -r '.codex.build' "$MODELS_FILE" 2>/dev/null) \
     || kit_die 2 "invalid or incomplete models file at $MODELS_FILE"
 fi
 

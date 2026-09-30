@@ -98,5 +98,48 @@ d=$(mktmp)
 printf '{"version":1,"claude_plan":"pro","codex":"none","jules":false,"kimi":false,"glm":false,"paseo":false}' > "$d/profile.json"
 assert_exit 0 "validate passes when jules_daily_limit is absent (defaults to 15)" -- env ROUTING_KIT_HOME="$d" "$KP" validate
 
+# Kimi and GLM only ever run inside the macOS Seatbelt jail: on a faked
+# Linux uname, `set kimi true` / `set glm true` must be refused with the
+# same message locked-build itself gives, and the file must stay unchanged.
+# Every other key (codex, jules, ...) must still work normally there.
+fakebin=$(mktmp)
+cat > "$fakebin/uname" <<'EOF'
+#!/bin/bash
+echo "Linux"
+EOF
+chmod +x "$fakebin/uname"
+d=$(mktmp)
+out=$(env PATH="$fakebin:$PATH" ROUTING_KIT_HOME="$d" "$KP" set kimi true 2>&1)
+code=$?
+assert_eq 2 "$code" "set kimi true refused on a faked Linux uname"
+assert_contains "$out" "Kimi and GLM need a Mac" "set kimi true on Linux gives the Kimi/GLM-needs-a-Mac message"
+if [ -f "$d/profile.json" ]; then
+  fail "kimi true on Linux must not create/modify profile.json"
+else
+  pass
+fi
+
+out=$(env PATH="$fakebin:$PATH" ROUTING_KIT_HOME="$d" "$KP" set glm true 2>&1)
+code=$?
+assert_eq 2 "$code" "set glm true refused on a faked Linux uname"
+assert_contains "$out" "Kimi and GLM need a Mac" "set glm true on Linux gives the Kimi/GLM-needs-a-Mac message"
+
+assert_exit 0 "set kimi false still works on a faked Linux uname" -- env PATH="$fakebin:$PATH" ROUTING_KIT_HOME="$d" "$KP" set kimi false
+assert_exit 0 "set codex plus still works on a faked Linux uname" -- env PATH="$fakebin:$PATH" ROUTING_KIT_HOME="$d" "$KP" set codex plus
+
+# Native Windows (no WSL) is not a supported system at all: any kit-profile
+# call refuses, faked via a MINGW64_NT-shaped uname.
+winbin=$(mktmp)
+cat > "$winbin/uname" <<'EOF'
+#!/bin/bash
+echo "MINGW64_NT-10.0"
+EOF
+chmod +x "$winbin/uname"
+dw=$(mktmp)
+out=$(env PATH="$winbin:$PATH" ROUTING_KIT_HOME="$dw" "$KP" set codex plus 2>&1)
+code=$?
+assert_eq 2 "$code" "kit-profile refuses on a faked native-Windows uname"
+assert_contains "$out" "routing-kit needs macOS, Linux, or WSL2 on Windows" "kit-profile prints the supported-systems message on native Windows"
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

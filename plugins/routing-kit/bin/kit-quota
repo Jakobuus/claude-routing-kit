@@ -24,7 +24,11 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 . "$SCRIPT_DIR/kit-common"
-kit_require_macos
+kit_require_supported
+# jq is essential here (profile parsing, every bucket calc): fail fast
+# (exit 3, install hint) rather than letting a `x=$(kit_jq ...)` below
+# swallow the real problem and silently show every lane as unknown.
+kit_require_jq
 
 AS_JSON=0
 case "${1:-}" in
@@ -46,7 +50,7 @@ prof_kimi='false'
 prof_glm='false'
 prof_jules_daily_limit=''
 if [ -f "$PROFILE_PATH" ]; then
-  row=$(/usr/bin/jq -r '[(.codex // "none"), (.jules // false), (.kimi // false), (.glm // false), (.jules_daily_limit // 15)] | @tsv' \
+  row=$(kit_jq -r '[(.codex // "none"), (.jules // false), (.kimi // false), (.glm // false), (.jules_daily_limit // 15)] | @tsv' \
     "$PROFILE_PATH" 2>/dev/null)
   if [ -n "$row" ]; then
     IFS=$'\t' read -r prof_codex prof_jules prof_kimi prof_glm prof_jules_daily_limit <<< "$row"
@@ -82,10 +86,10 @@ bucket() {
     return
   fi
   raw_percent=$percent
-  percent=$(/usr/bin/jq -nr --arg v "$percent" '$v | tonumber | floor')
+  percent=$(kit_jq -nr --arg v "$percent" '$v | tonumber | floor')
   elapsed=$((window - (reset - NOW)))
   if (( elapsed >= window / 10 )); then
-    pace=$(/usr/bin/jq -nr --argjson p "$raw_percent" --argjson w "$window" --argjson e "$elapsed" \
+    pace=$(kit_jq -nr --argjson p "$raw_percent" --argjson w "$window" --argjson e "$elapsed" \
       '($p * $w / $e + 0.5) | floor')
     if (( pace >= 100 )); then flag=' !'; fi
     BTEXT="${percent}% (pace ${pace}%${flag})"
@@ -100,7 +104,7 @@ claude_text='Claude 5h – · wk –'
 claude_json='{"five_hour":{"percent":null,"resets_epoch":null,"pace":null},"week":{"percent":null,"resets_epoch":null,"pace":null},"stale":false}'
 LIMITS_PATH="$KIT_HOME/claude-limits.json"
 if [ -f "$LIMITS_PATH" ]; then
-  row=$(/usr/bin/jq -r '
+  row=$(kit_jq -r '
     [ (.five_hour.used_percentage // ""),
       (.five_hour.resets_at // ""),
       (.seven_day.used_percentage // ""),
@@ -136,13 +140,18 @@ fi
 codex_text='' codex_json='null'
 if [ "$prof_codex" != none ] && [ -d "$CODEX_SESSIONS" ]; then
   line=''
+  # BSD stat (macOS) takes `-f '%m %N'`; GNU stat (Linux) takes `-c '%Y %n'`.
+  case "$(uname)" in
+    Darwin) stat_mtime_name=(stat -f '%m %N') ;;
+    *) stat_mtime_name=(stat -c '%Y %n') ;;
+  esac
   while IFS= read -r file; do
     candidate=$(grep 'rate_limits' "$file" 2>/dev/null | tail -n 1)
     if [ -n "$candidate" ]; then line=$candidate; break; fi
   done < <(find "$CODEX_SESSIONS" -mindepth 4 -maxdepth 4 -type f -name '*.jsonl' \
-             -exec stat -f '%m %N' {} + 2>/dev/null | sort -rn | head -n 5 | cut -d' ' -f2-)
+             -exec "${stat_mtime_name[@]}" {} + 2>/dev/null | sort -rn | head -n 5 | cut -d' ' -f2-)
   if [ -n "$line" ]; then
-    result=$(printf '%s\n' "$line" | /usr/bin/jq -r --argjson now "$NOW" '
+    result=$(printf '%s\n' "$line" | kit_jq -r --argjson now "$NOW" '
       def valid: type == "object" and (.used_percent | type == "number") and (.resets_at | type == "number");
       def pick($slot; $minutes):
         [.primary, .secondary] | map(select(valid)) as $w
@@ -272,7 +281,7 @@ fi
 
 # ---- Kimi/GLM: tokens and cost from the ledger since the 1st -----------
 ledger_summary() {
-  /usr/bin/python3 - "$KIT_HOME/ledger.tsv" "$(date +%Y-%m-01)" "$1" <<'PY'
+  kit_python3 - "$KIT_HOME/ledger.tsv" "$(date +%Y-%m-01)" "$1" <<'PY'
 import csv, json, os, sys
 path, month, provider = sys.argv[1:]
 tokens, spend = 0, 0.0
@@ -304,7 +313,7 @@ PY
 }
 
 ledger_display() {
-  /usr/bin/jq -r --arg name "$1" '
+  kit_jq -r --arg name "$1" '
     def money:
       if . == null then "$–"
       elif . == 0 then "$0.00"

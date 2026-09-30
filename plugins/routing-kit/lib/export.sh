@@ -2,7 +2,7 @@
 # lib/export.sh — run_export REPO NAME
 # bash 3.2 compatible: no mapfile, no ${x,,}, no associative arrays.
 #
-# Sourced by callers, not run directly. Depends on kit-common (kit_require_macos,
+# Sourced by callers, not run directly. Depends on kit-common (kit_require_supported,
 # kit_die, kit_realpath, KIT_HOME).
 
 EXPORT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -15,7 +15,7 @@ run_export() {
   local repo name date_str slug run_dir wt r
   repo="$1"
   name="$2"
-  kit_require_macos
+  kit_require_supported
   if [ -z "${repo:-}" ] || [ -z "${name:-}" ]; then
     kit_die 2 "usage: run_export REPO NAME"
   fi

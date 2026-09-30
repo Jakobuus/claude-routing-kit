@@ -4,6 +4,32 @@
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 GATE="$REPO_ROOT/plugins/routing-kit/lib/gate.py"
 
+# gate.py only ever runs inside the macOS Seatbelt jail: on any other real
+# host it must refuse outright (exit 2, the macOS-only message) rather than
+# start serving, before it ever gets as far as writing a port file. On a
+# real (non-Darwin) host, prove that refusal directly against the real,
+# unfaked uname, then SKIP the rest of this file -- the fake-upstream gate
+# suite below needs a working gate to even start, so it can't run here.
+case "$(uname)" in
+  Darwin) ;;
+  *)
+    gd=$(mktmp)
+    out=$(printf 'x\n' | GATE_TEST_UPSTREAM_INSECURE=1 /usr/bin/python3 "$GATE" \
+      --upstream "http://127.0.0.1:1" --port-file "$gd/port" 2>&1)
+    code=$?
+    assert_eq 2 "$code" "gate.py refuses on this real, non-macOS host"
+    assert_contains "$out" "routing-kit is macOS-only" "gate.py prints the exact macOS-only message here"
+    if [ -e "$gd/port" ]; then
+      fail "gate.py wrote a port file despite refusing on this real, non-macOS host"
+    else
+      pass
+    fi
+    echo "SKIP: test_gate.sh's fake-upstream gate suite needs macOS (gate.py only runs inside the Kimi/GLM jail)" >&2
+    echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
+    [ "$FAIL_COUNT" -eq 0 ] && exit 0 || exit 1
+    ;;
+esac
+
 # The provider key must never be a literal in this source file. Build it at
 # runtime from pid + timestamp so nothing resembling a real key ever sits in
 # the repo, and privacy-check has nothing fixed to flag.

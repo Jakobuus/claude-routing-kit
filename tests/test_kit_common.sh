@@ -132,5 +132,121 @@ else
   pass
 fi
 
+
+# --- kit_require_supported: macOS and Linux (incl. WSL2, which reports
+# uname as Linux) pass; anything else (native Windows' MINGW/MSYS/CYGWIN
+# uname, or anything unrecognized) refuses with the supported-systems
+# message, exit 2. -----------------------------------------------------------
+for fake_os in Darwin Linux; do
+  fakebin=$(mktmp)
+  cat > "$fakebin/uname" <<EOF
+#!/bin/bash
+echo "$fake_os"
+EOF
+  chmod +x "$fakebin/uname"
+  out=$(env PATH="$fakebin:$PATH" bash -c '. "'"$KC"'"; kit_require_supported; echo passed' 2>&1)
+  code=$?
+  assert_eq 0 "$code" "kit_require_supported passes on a faked $fake_os uname"
+  assert_contains "$out" "passed" "kit_require_supported returns (doesn't exit) on a faked $fake_os uname"
+done
+
+winbin=$(mktmp)
+cat > "$winbin/uname" <<'EOF'
+#!/bin/bash
+echo "MINGW64_NT-10.0"
+EOF
+chmod +x "$winbin/uname"
+out=$(env PATH="$winbin:$PATH" bash -c '. "'"$KC"'"; kit_require_supported; echo unreachable' 2>&1)
+code=$?
+assert_eq 2 "$code" "kit_require_supported refuses on a faked native-Windows uname"
+assert_contains "$out" "routing-kit needs macOS, Linux, or WSL2 on Windows" "kit_require_supported prints the supported-systems message"
+case "$out" in
+  *unreachable*) fail "kit_require_supported did not actually exit before the next line" ;;
+  *) pass ;;
+esac
+
+# --- kit_require_kimi_glm_macos: Darwin passes; anything else refuses with
+# the Kimi/GLM-specific message (distinct from the generic macOS-only and
+# supported-systems messages), exit 2. Platform-aware, since this test file
+# itself must pass on real macOS AND real Ubuntu: on whichever real host
+# this actually runs, it expects the outcome that host's real uname gives. -
+out=$(bash -c '. "'"$KC"'"; kit_require_kimi_glm_macos; echo passed' 2>&1)
+code=$?
+if [ "$(uname)" = Darwin ]; then
+  assert_eq 0 "$code" "kit_require_kimi_glm_macos passes on this real Mac"
+  assert_contains "$out" "passed" "kit_require_kimi_glm_macos returns on this real Mac"
+else
+  assert_eq 2 "$code" "kit_require_kimi_glm_macos refuses on this real, non-macOS host"
+  assert_contains "$out" "Kimi and GLM need a Mac" "kit_require_kimi_glm_macos prints the Kimi/GLM-specific message here"
+fi
+
+out=$(env PATH="$fakebin:$PATH" bash -c '. "'"$KC"'"; kit_require_kimi_glm_macos; echo unreachable' 2>&1)
+code=$?
+assert_eq 2 "$code" "kit_require_kimi_glm_macos refuses on a faked Linux uname"
+assert_contains "$out" "Kimi and GLM need a Mac" "kit_require_kimi_glm_macos prints the Kimi/GLM-specific message"
+case "$out" in
+  *unreachable*) fail "kit_require_kimi_glm_macos did not actually exit before the next line" ;;
+  *) pass ;;
+esac
+
+# --- kit_mtime: a real file's mtime is a plausible epoch second count
+# (within the last minute, given the file was just created), on whichever
+# platform this test happens to run. -----------------------------------------
+mt_file=$(mktmp)/mt.txt
+mkdir -p "$(dirname "$mt_file")"
+echo hi > "$mt_file"
+now=$(date +%s)
+mt=$(bash -c '. "'"$KC"'"; kit_mtime "'"$mt_file"'"')
+if [[ "$mt" =~ ^[0-9]+$ ]] && [ $((now - mt)) -ge -5 ] && [ $((now - mt)) -lt 60 ]; then
+  pass
+else
+  fail "kit_mtime gave an implausible mtime for a just-created file (now=$now mtime=$mt)"
+fi
+
+# --- kit_jq / kit_python3: resolve to a working interpreter on this
+# machine (stock macOS's /usr/bin/jq and /usr/bin/python3, per
+# kit_resolve_tools's preference) and actually run. ---------------------------
+out=$(bash -c '. "'"$KC"'"; echo "{}" | kit_jq -e .' 2>&1)
+assert_eq '{}' "$out" "kit_jq resolves to a working jq"
+out=$(bash -c '. "'"$KC"'"; kit_python3 -c "print(1 + 1)"' 2>&1)
+assert_eq '2' "$out" "kit_python3 resolves to a working python3"
+
+# --- kit_jq / kit_python3 / kit_require_jq / kit_require_python3
+# unresolvable case (exit 3, install hint, never a raw command-not-found
+# crash): only provable where /usr/bin/jq and /usr/bin/python3 genuinely
+# don't exist, since kit_resolve_tools checks those absolute paths
+# directly, ahead of PATH, on every OS -- this dev Mac (like stock macOS)
+# has both, so this can't be faked here via PATH alone. Proven via
+# KIT_TEST_NO_JQ/KIT_TEST_NO_PYTHON3 instead, the same override the public
+# commands' own missing-dependency tests use (test_codex_build.sh,
+# test_jules_build.sh, test_quota.sh) -- this dev Mac having both tools for
+# real is what CI's Ubuntu job, with no jq installed until its own
+# `apt-get install jq` step, proves end-to-end instead.
+out=$(env KIT_TEST_NO_JQ=1 bash -c '. "'"$KC"'"; kit_jq -e . <<< "{}"' 2>&1)
+code=$?
+assert_eq 3 "$code" "kit_jq exits 3 when no jq is resolvable"
+assert_contains "$out" "install jq" "kit_jq gives an install hint when unresolvable"
+out=$(env KIT_TEST_NO_PYTHON3=1 bash -c '. "'"$KC"'"; kit_python3 -c "pass"' 2>&1)
+code=$?
+assert_eq 3 "$code" "kit_python3 exits 3 when no python3 is resolvable"
+assert_contains "$out" "install python3" "kit_python3 gives an install hint when unresolvable"
+
+out=$(env KIT_TEST_NO_JQ=1 bash -c '. "'"$KC"'"; kit_require_jq; echo unreachable' 2>&1)
+code=$?
+assert_eq 3 "$code" "kit_require_jq exits 3 when no jq is resolvable"
+assert_contains "$out" "install jq" "kit_require_jq gives an install hint when unresolvable"
+case "$out" in
+  *unreachable*) fail "kit_require_jq did not actually exit before the next line" ;;
+  *) pass ;;
+esac
+out=$(env KIT_TEST_NO_PYTHON3=1 bash -c '. "'"$KC"'"; kit_require_python3; echo unreachable' 2>&1)
+code=$?
+assert_eq 3 "$code" "kit_require_python3 exits 3 when no python3 is resolvable"
+assert_contains "$out" "install python3" "kit_require_python3 gives an install hint when unresolvable"
+case "$out" in
+  *unreachable*) fail "kit_require_python3 did not actually exit before the next line" ;;
+  *) pass ;;
+esac
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

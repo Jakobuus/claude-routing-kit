@@ -9,7 +9,7 @@ LOCKED_BUILD="$REPO_ROOT/plugins/routing-kit/bin/locked-build"
 case "$(uname)" in
   Darwin) ;;
   *)
-    echo "test_locked_build.sh: macOS only, skipping" >&2
+    echo "SKIP: test_locked_build.sh needs macOS (Kimi/GLM Seatbelt jail)" >&2
     echo "PASS 0 / FAIL 0"
     exit 0
     ;;

@@ -36,7 +36,10 @@ set -u
 
 BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 . "$BIN_DIR/kit-common"
-kit_require_macos
+kit_require_supported
+# jq is essential here: fail fast (exit 3, install hint) rather than
+# limping through a run of otherwise-inexplicable check failures.
+kit_require_jq
 
 LIB_DIR="$(cd "$BIN_DIR/../lib" && pwd -P)"
 . "$LIB_DIR/seatbelt.sh"
@@ -85,11 +88,11 @@ lane_enabled() {
   [ -f "$PROFILE_JSON" ] || return 1
   case "$1" in
     codex)
-      v=$(/usr/bin/jq -r '.codex // "none"' "$PROFILE_JSON" 2>/dev/null)
+      v=$(kit_jq -r '.codex // "none"' "$PROFILE_JSON" 2>/dev/null)
       [ -n "$v" ] && [ "$v" != "none" ]
       ;;
     jules|kimi|glm)
-      v=$(/usr/bin/jq -r --arg k "$1" '.[$k] // false' "$PROFILE_JSON" 2>/dev/null)
+      v=$(kit_jq -r --arg k "$1" '.[$k] // false' "$PROFILE_JSON" 2>/dev/null)
       [ "$v" = "true" ]
       ;;
     *)
@@ -191,7 +194,15 @@ if lane_enabled jules; then
 fi
 
 # --- kimi / glm (locked-build) ---------------------------------------------
+# Kimi/GLM's Seatbelt jail is macOS-only; on Linux/WSL2 this always prints a
+# plain SKIP line, whether or not the profile happens to say the lane is on
+# (kit-profile itself refuses to turn kimi/glm on off-Mac, but a hand-edited
+# profile.json could still say so).
 for provider in kimi glm; do
+  if [ "$(uname)" != Darwin ]; then
+    printf '%s: SKIP (macOS only)\n' "$provider"
+    continue
+  fi
   if lane_enabled "$provider"; then
     tmp_repo=$(mk_selftest_repo)
     tmp_brief=$(mk_selftest_brief)
@@ -214,6 +225,11 @@ for provider in kimi glm; do
 done
 
 # --- canaries (lib/canaries.sh, full mode) ----------------------------------
+# Seatbelt/sandbox-exec is macOS-only, so this whole check is a plain SKIP
+# on Linux/WSL2 -- there's no jail there to probe.
+if [ "$(uname)" != Darwin ]; then
+  printf 'canaries: SKIP (macOS only)\n'
+else
 # Built the same way locked-build builds its own canary run (a throwaway wt,
 # a resolved fake-shaped claude_bin, a scratch loopback port, seatbelt_generate
 # then canaries_run) -- see bin/locked-build's Step 6/7 and tests/test_canaries.sh,
@@ -241,7 +257,7 @@ else
   canary_tmp=$(kit_realpath "$canary_tmp")
   canary_claude_bin="$(kit_realpath "$canary_scratch")/fake-claude-bin"
 
-  canary_port=$(/usr/bin/python3 -c '
+  canary_port=$(kit_python3 -c '
 import socket
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.bind(("127.0.0.1", 0))
@@ -279,6 +295,7 @@ s.close()
 fi
 rm -rf "$canary_scratch"
 [ -n "$canary_src" ] && rm -rf "$canary_src"
+fi
 
 printf 'SELFTEST SUMMARY ok=%s fail=%s\n' "$OK_COUNT" "$FAIL_COUNT"
 exit "$OVERALL_EXIT"

@@ -5,7 +5,12 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 . "$SCRIPT_DIR/kit-common"
-kit_require_macos
+kit_require_supported
+# jq is essential here: fail fast (exit 3, install hint) rather than
+# letting a `x=$(kit_jq ...)` below mask the real problem. The
+# session-start hook already treats any non-zero exit from this script as
+# "print a one-line repair message, exit 0" -- it never blocks a session.
+kit_require_jq
 
 PROFILE_FILE="$KIT_HOME/profile.json"
 MODELS_FILE="$SCRIPT_DIR/../rules/models.json"
@@ -26,7 +31,7 @@ if [ ! -f "$PROFILE_FILE" ]; then
   kit_die 2 "no profile at $PROFILE_FILE"
 fi
 
-valid=$(/usr/bin/jq -e '
+valid=$(kit_jq -e '
   (.version == 1) and
   ((.claude_plan // "") as $c | ["pro","max5","max20","team","api"] | index($c) != null) and
   ((if .codex == null then "none" else .codex end) as $c |
@@ -40,10 +45,10 @@ if [ "$valid" != "0" ]; then
   kit_die 2 "invalid profile at $PROFILE_FILE"
 fi
 
-codex=$(/usr/bin/jq -r '.codex // "none"' "$PROFILE_FILE")
-jules=$(/usr/bin/jq -r '.jules // false' "$PROFILE_FILE")
-kimi=$(/usr/bin/jq -r '.kimi // false' "$PROFILE_FILE")
-glm=$(/usr/bin/jq -r '.glm // false' "$PROFILE_FILE")
+codex=$(kit_jq -r '.codex // "none"' "$PROFILE_FILE")
+jules=$(kit_jq -r '.jules // false' "$PROFILE_FILE")
+kimi=$(kit_jq -r '.kimi // false' "$PROFILE_FILE")
+glm=$(kit_jq -r '.glm // false' "$PROFILE_FILE")
 
 if [ ! -r "$MODELS_FILE" ]; then
   kit_die 2 "cannot read models file at $MODELS_FILE"
@@ -53,7 +58,7 @@ fi
 # unreadable/malformed models file is caught here instead of silently
 # producing an empty model name.
 read_model() {
-  /usr/bin/jq -e -r "$1" "$MODELS_FILE" 2>/dev/null
+  kit_jq -e -r "$1" "$MODELS_FILE" 2>/dev/null
 }
 
 codex_strong=$(read_model '.codex.strong') || kit_die 2 "invalid or incomplete models file at $MODELS_FILE"
@@ -125,8 +130,10 @@ if [ "$jules" = "true" ]; then
   echo "| Mechanical work with an existing check | Jules via kit-jules-build | GitHub repos only; free 15 tasks/day |"
 fi
 
-# Cheap extra builds (Kimi/GLM)
-if [ "$kimi" = "true" ] || [ "$glm" = "true" ]; then
+# Cheap extra builds (Kimi/GLM) -- macOS-only (the Seatbelt jail): never
+# listed off a Mac, even if a hand-edited profile.json says kimi/glm true
+# (kit-profile itself already refuses to set either true off-Mac).
+if [ "$(uname)" = Darwin ] && { [ "$kimi" = "true" ] || [ "$glm" = "true" ]; }; then
   use=""
   if [ "$kimi" = "true" ]; then
     use="locked-build --provider kimi"

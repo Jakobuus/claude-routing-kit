@@ -13,7 +13,7 @@ LIB_DIR="$REPO_ROOT/plugins/routing-kit/lib"
 case "$(uname)" in
   Darwin) ;;
   *)
-    echo "test_canaries.sh: macOS only, skipping" >&2
+    echo "SKIP: test_canaries.sh needs macOS (Kimi/GLM Seatbelt jail)" >&2
     echo "PASS 0 / FAIL 0"
     exit 0
     ;;
@@ -77,7 +77,14 @@ fi
 pass
 
 # --- run the full canary suite ---------------------------------------------
-out=$(canaries_run "$profile" "$wt" "$src" "$port" full)
+# KIT_CANARY_DEBUG_DIR_FILE: canary_dir/keychain_svc are random per call
+# (mktemp), not a fixed or pid-derived name a test could guess from outside
+# -- see canaries.sh's own comment on canary_dir for why. Capture the real
+# values via the test-only hook so "nothing left behind" below checks the
+# actual fixture, not a guessed path that would trivially "pass" by no
+# longer existing at all.
+canary_debug_file=$(mktmp)/canary-dirs.txt
+out=$(KIT_CANARY_DEBUG_DIR_FILE="$canary_debug_file" canaries_run "$profile" "$wt" "$src" "$port" full)
 code=$?
 echo "$out"
 
@@ -120,31 +127,39 @@ case "$out" in
 esac
 
 # --- no fixtures left behind -------------------------------------------------
-real_home="$(kit_realpath "$HOME")"
-if [ -e "$real_home/.routing-kit-canary/marker" ]; then
-  fail "canary marker left behind in the real home"
+# Read the real canary_dir/keychain_svc back from the debug file the hook
+# above wrote (see canaries.sh: they're mktemp-random per call, not a
+# guessable name).
+canary_dir=$(sed -n '1p' "$canary_debug_file" 2>/dev/null)
+canary_keychain_svc=$(sed -n '2p' "$canary_debug_file" 2>/dev/null)
+if [ -z "$canary_dir" ] || [ -z "$canary_keychain_svc" ]; then
+  fail "KIT_CANARY_DEBUG_DIR_FILE was not written -- cannot check for leftover fixtures"
 else
-  pass
-fi
-if [ -e "$real_home/.routing-kit-canary/sock" ]; then
-  fail "canary socket left behind in the real home"
-else
-  pass
-fi
-if [ -e "$real_home/.routing-kit-canary/written" ]; then
-  fail "canary write-test file left behind in the real home"
-else
-  pass
-fi
-if security find-generic-password -s routing-kit-canary -w >/dev/null 2>&1; then
-  fail "canary Keychain item left behind"
-else
-  pass
-fi
-if [ -e "$real_home/.routing-kit-canary" ]; then
-  fail "\$HOME/.routing-kit-canary directory itself left behind (not just its contents)"
-else
-  pass
+  if [ -e "$canary_dir/marker" ]; then
+    fail "canary marker left behind in the real home"
+  else
+    pass
+  fi
+  if [ -e "$canary_dir/sock" ]; then
+    fail "canary socket left behind in the real home"
+  else
+    pass
+  fi
+  if [ -e "$canary_dir/written" ]; then
+    fail "canary write-test file left behind in the real home"
+  else
+    pass
+  fi
+  if security find-generic-password -s "$canary_keychain_svc" -w >/dev/null 2>&1; then
+    fail "canary Keychain item left behind"
+  else
+    pass
+  fi
+  if [ -e "$canary_dir" ]; then
+    fail "canary_dir ($canary_dir) itself left behind (not just its contents)"
+  else
+    pass
+  fi
 fi
 
 # --- quick mode skips the gitignored-file probe -----------------------------
@@ -224,6 +239,111 @@ if [ "$_CANARY_FAIL" -gt "$before_fail" ]; then
   pass
 else
   fail "a plain 'could not be found' line (without CreateFromAttributes) was accepted as a valid denial"
+fi
+
+# --- regression: two concurrent canaries_run invocations must not race on
+# real-$HOME fixtures ---------------------------------------------------------
+# Reproduced directly (see canaries.sh's file header): before canary_dir and
+# the Keychain item name were namespaced by $$, two canaries_run calls
+# running at the same time (two locked-build runs, or locked-build racing a
+# friend's kit-selftest -- both normal on one machine) shared a single
+# "$HOME/.routing-kit-canary" and Keychain item "routing-kit-canary". One
+# call's own cleanup (its RETURN trap deletes the marker/Keychain item when
+# ITS canaries_run returns) could delete the OTHER call's still-in-flight
+# fixture, which surfaced as a plain "CANARY FAIL" -- indistinguishable from
+# a genuine Seatbelt leak, and became locked-build's exit 5 ("lockdown
+# failed") even though nothing ever leaked.
+#
+# This runs two REAL, separately-forked `bash` processes (not two subshells
+# of this script: $$ is inherited from the parent across `( ... ) &`, so
+# subshells here would share one pid and never exercise the per-pid
+# namespacing at all) each running the full canary suite against its own
+# wt/profile/port, started together so their setup/teardown windows
+# overlap. Before the $$ namespacing fix this reproduced a spurious CANARY
+# FAIL essentially every time two full runs genuinely overlapped; run
+# several pairs to keep it that way as a real regression guard rather than
+# a lucky one-shot.
+conc_pairs=4
+conc_any_fail=0
+conc_i=1
+while [ "$conc_i" -le "$conc_pairs" ]; do
+  cd=$(mktmp)
+  for side in a b; do
+    side_dir="$cd/$side"
+    mkdir -p "$side_dir/wt" "$side_dir/home" "$side_dir/cfg" "$side_dir/tmp"
+    echo hello > "$side_dir/wt/a.txt"
+    printf '#!/bin/bash\necho fake\n' > "$side_dir/claude-bin"
+    chmod +x "$side_dir/claude-bin"
+  done
+  src_a="$(mktmp)"
+  git -C "$src_a" init -q
+  git -C "$src_a" config user.email you@example.com
+  git -C "$src_a" config user.name "Test User"
+  echo hello > "$src_a/a.txt"
+  git -C "$src_a" add a.txt
+  git -C "$src_a" commit -q -m init
+  src_b="$(mktmp)"
+  git -C "$src_b" init -q
+  git -C "$src_b" config user.email you@example.com
+  git -C "$src_b" config user.name "Test User"
+  echo hello > "$src_b/a.txt"
+  git -C "$src_b" add a.txt
+  git -C "$src_b" commit -q -m init
+
+  conc_runner="$cd/runner.sh"
+  cat > "$conc_runner" <<RUNNER_EOF
+#!/bin/bash
+set -u
+side_dir="\$1"; src="\$2"; out_file="\$3"; port="\$4"
+. "$LIB_DIR/../bin/kit-common"
+. "$LIB_DIR/seatbelt.sh"
+. "$LIB_DIR/canaries.sh"
+wt="\$(kit_realpath "\$side_dir/wt")"
+run_home="\$(kit_realpath "\$side_dir/home")"
+run_cfg="\$(kit_realpath "\$side_dir/cfg")"
+run_tmp="\$(kit_realpath "\$side_dir/tmp")"
+claude_bin="\$(kit_realpath "\$side_dir")/claude-bin"
+profile="\$side_dir/profile.sb"
+seatbelt_generate "\$profile" "\$wt" "\$run_home" "\$run_cfg" "\$run_tmp" "\$claude_bin" "\$port"
+canaries_run "\$profile" "\$wt" "\$src" "\$port" full > "\$out_file" 2>&1
+echo \$? >> "\$out_file.code"
+RUNNER_EOF
+  chmod +x "$conc_runner"
+
+  # Fixed, widely-separated ports per side (not an OS-assigned bind(0) pick
+  # per side, unlike production code): each canaries_run call also opens
+  # stub listeners on port+1/port+2 for its own network probes, and two
+  # independent bind(0)-then-close pickers running this close together can
+  # coincide or collide under heavy, tight-loop ephemeral-port churn -- a
+  # real but SEPARATE hazard from the one this test targets (see the
+  # concurrency comment above). Fixed, far-apart blocks keep this
+  # regression test focused on the real-$HOME/Keychain race being tested
+  # here, not that unrelated port-reuse timing issue.
+  port_a=$((21000 + conc_i * 10))
+  port_b=$((26000 + conc_i * 10))
+
+  bash "$conc_runner" "$cd/a" "$src_a" "$cd/a.out" "$port_a" &
+  pid_a=$!
+  bash "$conc_runner" "$cd/b" "$src_b" "$cd/b.out" "$port_b" &
+  pid_b=$!
+  wait "$pid_a"
+  wait "$pid_b"
+
+  code_a=$(cat "$cd/a.out.code" 2>/dev/null)
+  code_b=$(cat "$cd/b.out.code" 2>/dev/null)
+  out_a=$(cat "$cd/a.out" 2>/dev/null)
+  out_b=$(cat "$cd/b.out" 2>/dev/null)
+
+  if [ "$code_a" != 0 ] || [ "$code_b" != 0 ] \
+     || printf '%s' "$out_a" | grep -q '^CANARY FAIL' \
+     || printf '%s' "$out_b" | grep -q '^CANARY FAIL'; then
+    conc_any_fail=1
+    fail "concurrency pair $conc_i: a real-\$HOME fixture race between two concurrent canaries_run calls (code_a=$code_a code_b=$code_b); see $cd/a.out and $cd/b.out"
+  fi
+  conc_i=$((conc_i + 1))
+done
+if [ "$conc_any_fail" -eq 0 ]; then
+  pass
 fi
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"

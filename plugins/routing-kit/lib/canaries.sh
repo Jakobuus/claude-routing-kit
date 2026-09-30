@@ -12,8 +12,28 @@
 # is broken (nothing was actually being tested) and that counts as a
 # failure. Fixtures live under the real $HOME (never the jail's throwaway
 # HOME) so the probes exercise exactly the paths the profile must not leak:
-# $HOME/.routing-kit-canary is created and torn down by this file, never
-# left behind on a failure.
+# a freshly `mktemp -d`'d $HOME/.routing-kit-canary-<random> directory and a
+# Keychain item named from that same random suffix are created and torn
+# down by this file, never left behind on a failure, and never a fixed or
+# merely-pid-based name (see canaries_run's own comment on canary_dir for
+# why both a fixed name and a "$$"-only name were tried and reproducibly
+# failed: two invocations of this file overlapping in time -- two
+# locked-build runs, or locked-build racing a friend's kit-selftest, both
+# normal on one machine -- or even the SAME machine's pid space simply
+# recycling a number across one test file's own ~20 sequential locked-build
+# calls, let one invocation's setup/teardown race a DIFFERENT invocation's
+# in-flight probe on what looked like "its own" path. Reproduced both ways:
+# concurrently, the "read marker through a symlink in wt" probe's positive
+# control failed with "cat: .../marker: No such file or directory" (one
+# call's cleanup had deleted the other's marker mid-run); sequentially (a
+# 20x loop of the full test file, nothing else running), 2 of the first 4
+# runs failed a plain, unforced item with "CANARY FAIL"/exit 5 once pid
+# reuse let a later run's canary_dir collide with an earlier, not-yet-fully
+# -cleaned-up one. Either way it surfaces as a plain "CANARY FAIL",
+# indistinguishable from a genuine Seatbelt leak, and turns into locked-
+# build's exit 5 ("lockdown failed") even though nothing ever leaked.
+# mktemp -d's atomic create-or-fail removes the shared/reusable name
+# instead of trying to out-poll the race.
 #
 # PORT is the one loopback port the given PROFILE allows outbound traffic
 # to (see lib/seatbelt.sh) — canaries_run stands up its own tiny stub
@@ -224,6 +244,7 @@ canaries_run() {
   local _argv_wait_i _argv_reason
   local rw_out rw_code grandchild_cmd pos_out jail_out gate_out gate_code
   local udp_port wt_sock wt_sock_pid _fd_probe ipv6_route_out
+  local keychain_svc
 
   profile="$1"; wt="$2"; src_repo="$3"; port="$4"; mode="${5:-quick}"
   _CANARY_PASS=0
@@ -237,8 +258,36 @@ canaries_run() {
   _CANARY_WT="$wt"
   real_home="$(kit_realpath "$HOME")"
   claude_dir="$(kit_claude_dir)"
-  canary_dir="$real_home/.routing-kit-canary"
-  mkdir -p "$canary_dir"
+  # mktemp -d, not "$$" and not a fixed name: two canaries_run invocations
+  # (two locked-build runs, or locked-build racing a friend's kit-selftest)
+  # are a normal thing to have running on one machine at once, and a shared
+  # path here would let one's setup/teardown race the other's in-flight
+  # probe -- see the file header comment for the reproduced failure this
+  # caused. "$$" alone was tried first and was NOT enough: test_locked_build.sh
+  # calls locked-build (a fresh `bash` process, its own pid) roughly 20
+  # times in quick succession, each forking a further tree of short-lived
+  # children (gate.py, canary probe subshells, compiled C probes) -- under
+  # that much process churn a pid can and does get recycled by the OS
+  # within the same test run, so a NEW invocation could inherit an OLD
+  # one's directory name before its predecessor's own cleanup had fully
+  # landed. Reproduced directly: a 20x loop of the full test file, nothing
+  # else running, failed on 2 of the first 4 runs with a plain "CANARY
+  # FAIL"/exit 5 on an unrelated, unforced item -- with pid reuse ruled in
+  # as the only thing that changes between one call and the next in a
+  # purely sequential, one-process-at-a-time test run. mktemp -d's atomic
+  # create-or-fail (same guarantee lib/export.sh's run_dir relies on) has
+  # no such reuse window. keychain_svc reuses the same random suffix mktemp
+  # already generated rather than drawing a second one.
+  canary_dir="$(mktemp -d "$real_home/.routing-kit-canary-XXXXXX")" \
+    || kit_die 4 "could not create a canary fixture dir under $real_home"
+  keychain_svc="routing-kit-canary-${canary_dir##*-}"
+  # Test-only hook (mirrors KIT_CANARY_PID_FILE): canary_dir/keychain_svc are
+  # random per call now (mktemp), not derivable from outside, so a test that
+  # wants to assert "nothing left behind" needs the real values. A no-op
+  # unless a caller opts in; never set in production.
+  if [ -n "${KIT_CANARY_DEBUG_DIR_FILE:-}" ]; then
+    printf '%s\n%s\n' "$canary_dir" "$keychain_svc" >> "$KIT_CANARY_DEBUG_DIR_FILE"
+  fi
   marker="$canary_dir/marker"
   printf 'canary-marker\n' > "$marker"
 
@@ -264,7 +313,7 @@ canaries_run() {
     rm -f "$canary_dir/sock" "$wt/.rk-wtsock"
     rm -f "$wt/.rk-procinfo-probe" "$wt/.rk-procinfo-probe.c"
     rm -f "$wt/.rk-procargs-probe" "$wt/.rk-procargs-probe.c"
-    security delete-generic-password -s routing-kit-canary >/dev/null 2>&1
+    security delete-generic-password -s "$keychain_svc" >/dev/null 2>&1
     # rmdir, not rm -rf: only removes it if every fixture above was
     # actually cleaned up first, so this never eats something unrelated a
     # broken run left behind.
@@ -511,7 +560,7 @@ PROBE_EOF
   # $USER, not "$USER" alone: under `set -u` (locked-build sources this
   # file into its own shell) an unset $USER (e.g. under a stripped env)
   # would abort the whole script, not just this probe.
-  security add-generic-password -s routing-kit-canary -a "${USER:-$(id -un)}" -w "canary-secret-$$" -U >/dev/null 2>&1
+  security add-generic-password -s "$keychain_svc" -a "${USER:-$(id -un)}" -w "canary-secret-$$" -U >/dev/null 2>&1
   # With securityd's mach-lookup denied, the `security` CLI doesn't print
   # "Operation not permitted" itself -- it can't reach securityd to search
   # at all. It prints two lines; only the first is denial-specific --
@@ -521,11 +570,11 @@ PROBE_EOF
   # and legitimately found nothing. Require the CreateFromAttributes line,
   # which only appears when the search itself couldn't be started.
   _canary_denied "security find-generic-password" \
-    "security find-generic-password -s routing-kit-canary -w" \
-    "security find-generic-password -s routing-kit-canary -w" \
+    "security find-generic-password -s '$keychain_svc' -w" \
+    "security find-generic-password -s '$keychain_svc' -w" \
     "$profile" \
     "$_CANARY_KEYCHAIN_DENIAL_PATTERN"
-  security delete-generic-password -s routing-kit-canary >/dev/null 2>&1
+  security delete-generic-password -s "$keychain_svc" >/dev/null 2>&1
 
   # --- Unix socket standing in for Docker/ssh-agent -------------------------
   # The listener answers a minimal valid HTTP response, so curl's positive

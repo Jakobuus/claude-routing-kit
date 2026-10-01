@@ -1,3 +1,4 @@
+<img width="1254" height="1254" alt="image" src="https://github.com/user-attachments/assets/0f647fa8-0945-48f2-aa10-0f3a30519299" />
 # routing-kit
 
 A Claude Code plugin that decides which AI model does which job.

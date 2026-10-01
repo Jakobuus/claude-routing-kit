@@ -121,6 +121,97 @@ kit_die() {
   exit "$code"
 }
 
+# kit_canary_verdict LOGFILE STATUS — validates lib/canaries.sh's own
+# "CANARY SUMMARY pass=N fail=N env_fail=N" line against STATUS (the real
+# exit status of the canaries_run call that produced LOGFILE -- locked-
+# build's own $canary_code / $final_canary_code) and returns exactly one
+# of three verdicts:
+#
+#   0 -- a single, strictly-formatted summary line, consistent with a
+#        clean round (STATUS 0, fail=0, env_fail=0). Safe to proceed.
+#   4 -- a single, strictly-formatted summary line, consistent with a
+#        failed round (STATUS != 0) where fail=0 and env_fail>0 -- a
+#        positive control or a probe's own listener setup that was still
+#        broken after canaries.sh's own retry. An environment problem, not
+#        evidence the jail leaked.
+#   5 -- every other case: fail>0 (a real, deterministic Seatbelt leak,
+#        always wins), zero or more than one line beginning with "CANARY
+#        SUMMARY", a line that doesn't match canaries_run's own exact
+#        "pass=<digits> fail=<digits> env_fail=<digits>" format, or fields
+#        that contradict STATUS. A result that can't be read as
+#        "definitely, unambiguously fine or only an environment problem"
+#        defaults to the stricter refusal.
+#
+# Called on EVERY round, not only a failed one (security review, round 2):
+# a STATUS of 0 with an unreadable, missing, or self-contradictory log
+# must not be silently treated as success either -- it is validated the
+# same way, just against the "nothing failed" shape instead of "something
+# failed".
+#
+# The candidate-line match is `^CANARY SUMMARY` with NO trailing space
+# requirement, specifically so a malformed line like
+# "CANARY SUMMARYjunk ... fail=1 ..." is still counted as a candidate
+# (security review, round 2: the prior match required a literal space
+# after SUMMARY, which "SUMMARYjunk" lacks, so that line was silently
+# excluded from the count -- a log containing that junk line PLUS one
+# well-formed summary line then read back as "exactly one valid summary"
+# and returned 4, when the presence of ANY other line starting with the
+# same prefix means the log can't be trusted to contain only what
+# canaries_run itself would have printed). Earlier still (first review
+# round), the prior form's `.* fail=` pattern could also be fooled by
+# "fail=0garbage" (digit-then-anything, not digits-only) and by a
+# duplicated "fail=1 fail=0" field.
+kit_canary_verdict() {
+  local log status count line pass fail env_fail
+  log="$1"; status="$2"
+
+  count=$(grep -c '^CANARY SUMMARY' "$log" 2>/dev/null)
+  if [ "$count" != "1" ]; then
+    echo 5
+    return
+  fi
+
+  line=$(grep '^CANARY SUMMARY' "$log")
+  if ! printf '%s\n' "$line" | grep -Eq '^CANARY SUMMARY pass=[0-9]+ fail=[0-9]+ env_fail=[0-9]+$'; then
+    echo 5
+    return
+  fi
+
+  pass=$(printf '%s\n' "$line" | sed -n 's/^CANARY SUMMARY pass=\([0-9][0-9]*\) fail=\([0-9][0-9]*\) env_fail=\([0-9][0-9]*\)$/\1/p')
+  fail=$(printf '%s\n' "$line" | sed -n 's/^CANARY SUMMARY pass=\([0-9][0-9]*\) fail=\([0-9][0-9]*\) env_fail=\([0-9][0-9]*\)$/\2/p')
+  env_fail=$(printf '%s\n' "$line" | sed -n 's/^CANARY SUMMARY pass=\([0-9][0-9]*\) fail=\([0-9][0-9]*\) env_fail=\([0-9][0-9]*\)$/\3/p')
+  if [ -z "$pass" ] || [ -z "$fail" ] || [ -z "$env_fail" ]; then
+    echo 5
+    return
+  fi
+
+  if [ "$status" -eq 0 ] 2>/dev/null; then
+    # A clean exit must be backed by an all-zero summary -- anything else
+    # (the round claims to have failed something, or the status/log
+    # disagree) can't be treated as success.
+    if [ "$fail" -eq 0 ] && [ "$env_fail" -eq 0 ]; then
+      echo 0
+    else
+      echo 5
+    fi
+    return
+  fi
+
+  # STATUS is nonzero here. The summary claiming nothing failed at all
+  # contradicts canaries_run's own return convention (nonzero iff fail>0
+  # or env_fail>0) -- can't be trusted either way.
+  if [ "$fail" -eq 0 ] && [ "$env_fail" -eq 0 ]; then
+    echo 5
+    return
+  fi
+
+  if [ "$fail" -eq 0 ] && [ "$env_fail" -gt 0 ]; then
+    echo 4
+  else
+    echo 5
+  fi
+}
+
 KIT_HOME="${ROUTING_KIT_HOME:-$HOME/.config/routing-kit}"
 
 # Claude Code can keep its settings and plugins outside the default folder.

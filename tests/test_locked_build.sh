@@ -411,13 +411,103 @@ else
   fi
 fi
 
+# --- security review (30/09), INFO: a canary ENVIRONMENT problem (an
+# unrecoverable positive control, not a leak) exits 4, not 5, and -- same
+# as a real leak -- must never let the build start: no gate, no claude
+# call. KIT_CANARY_FORCE_POS_FAIL forces a positive control to fail on
+# every attempt (no recovery), driving the real env_fail/exit-4 path
+# through the real canaries_run/locked-build flow. --------------------------
+kit_home=$(mktmp)
+write_profile "$kit_home" true
+repo=$(mk_src_repo)
+out=$(KIT_CANARY_FORCE_POS_FAIL="read real-home marker" \
+      run_locked_build "$kit_home" "$claude_link" "$keychain_hit" "$repo" run-envfail "$BRIEF" 2>&1)
+code=$?
+assert_eq 4 "$code" "an unrecoverable canary environment problem exits 4, not 5"
+assert_contains "$out" "CANARY ENVFAIL read real-home marker" "the environment-problem canary is named in the output"
+case "$out" in
+  *"CANARY FAIL read real-home marker"*)
+    fail "an env_fail-only canary round was also reported as a real CANARY FAIL"
+    ;;
+  *) pass ;;
+esac
+run_dir=$(find "$kit_home/runs" -maxdepth 1 -name '*run-envfail*' 2>/dev/null | head -1)
+if [ -z "$run_dir" ]; then
+  fail "could not find the run-envfail run dir"
+else
+  if [ -f "$run_dir/gate-port" ]; then
+    fail "the gate started even though the canary round was an environment problem (exit 4)"
+  else
+    pass
+  fi
+  if [ -f "$run_dir/wt/.fake-claude-called-marker" ]; then
+    fail "fake claude was called despite the canary environment-problem refusal"
+  else
+    pass
+  fi
+  if pgrep -f "gate.py.*$run_dir" >/dev/null 2>&1; then
+    fail "a gate process is still running for the run-envfail refusal"
+  else
+    pass
+  fi
+fi
+
+# --- security review (round 2), INFO: the SAME environment-problem path,
+# but on the FINAL-profile canary round only (after the gate has already
+# started) -- mirrors item 16's "the gate really is up by this point and
+# must be killed" distinction for a real leak, done here for an env_fail
+# instead. KIT_CANARY_FORCE_POS_FAIL_CALL=2 forces the positive control to
+# fail (no recovery) only on canaries_run's second call. ------------------
+kit_home=$(mktmp)
+write_profile "$kit_home" true
+repo=$(mk_src_repo)
+out=$(KIT_CANARY_FORCE_POS_FAIL="read real-home marker" \
+      KIT_CANARY_FORCE_POS_FAIL_CALL=2 \
+      run_locked_build "$kit_home" "$claude_link" "$keychain_hit" "$repo" run-envfail-final "$BRIEF" 2>&1)
+code=$?
+assert_eq 4 "$code" "an unrecoverable canary environment problem on the FINAL round also exits 4, not 5"
+if [ "$code" != 4 ]; then
+  printf '%s\n' "$out" | grep -E '^CANARY|canary check failed|lockdown' >&2
+fi
+assert_contains "$out" "CANARY ENVFAIL read real-home marker" "the final-round environment-problem canary is named in the output"
+case "$out" in
+  *"CANARY FAIL read real-home marker"*)
+    fail "a final-round env_fail-only canary round was also reported as a real CANARY FAIL"
+    ;;
+  *) pass ;;
+esac
+run_dir=$(find "$kit_home/runs" -maxdepth 1 -name '*run-envfail-final*' 2>/dev/null | head -1)
+if [ -z "$run_dir" ]; then
+  fail "could not find the run-envfail-final run dir"
+else
+  if [ -f "$run_dir/wt/.fake-claude-called-marker" ]; then
+    fail "fake claude was called despite the final-round canary environment-problem refusal"
+  else
+    pass
+  fi
+  # Unlike the first-round variant above, the gate DOES start before the
+  # final canary round runs (Step 8 happens before the final check) --
+  # proving the build is still suppressed and the gate is torn down even
+  # though it was already up, not just when it never started at all.
+  if [ -f "$run_dir/gate-port" ]; then
+    pass
+  else
+    fail "expected the gate to have started before the final-round canary environment-problem check ran"
+  fi
+  if pgrep -f "gate.py.*$run_dir" >/dev/null 2>&1; then
+    fail "a gate process is still running after the final-round environment-problem refusal (exit 4)"
+  else
+    pass
+  fi
+fi
+
 # --- 8/9. happy path -----------------------------------------------------------
 kit_home=$(mktmp)
 write_profile "$kit_home" true
 repo=$(mk_src_repo)
 out=$(run_locked_build "$kit_home" "$claude_link" "$keychain_hit" "$repo" run8 "$BRIEF" 2>&1)
 code=$?
-assert_eq 0 "$code" "happy path exits 0"
+assert_locked_build_ok "$code" "$out" "happy path exits 0"
 assert_contains "$out" "hello-from-fake-claude.txt" "the diff shows fake claude's new file"
 assert_contains "$out" "run dir:" "the run dir is printed"
 
@@ -545,7 +635,7 @@ repo=$(mk_src_repo)
 leftover_claude=$(mk_native_claude_leftover_child)
 out=$(run_locked_build "$kit_home" "$leftover_claude" "$keychain_hit" "$repo" run-item7 "$BRIEF" 2>&1)
 code=$?
-assert_eq 0 "$code" "item 7: fake claude with a leftover background child still exits 0 itself"
+assert_locked_build_ok "$code" "$out" "item 7: fake claude with a leftover background child still exits 0 itself"
 run_dir=$(find "$kit_home/runs" -maxdepth 1 -name '*run-item7*' 2>/dev/null | head -1)
 if [ -z "$run_dir" ]; then
   fail "item 7: could not find the run dir"
@@ -658,7 +748,7 @@ out=$(
       bash "$LOCKED_BUILD" --provider kimi --repo "$repo_base" --name run-item13 --brief "$BRIEF" 2>&1
 )
 code=$?
-assert_eq 0 "$code" "item 13: a relative --repo (resolved against the caller's cwd) still works"
+assert_locked_build_ok "$code" "$out" "item 13: a relative --repo (resolved against the caller's cwd) still works"
 
 # --- item 14: cache tokens are summed into the ledger's "in" column ---------
 kit_home=$(mktmp)
@@ -667,7 +757,7 @@ repo=$(mk_src_repo)
 cache_claude=$(mk_native_claude_cache_tokens)
 out=$(run_locked_build "$kit_home" "$cache_claude" "$keychain_hit" "$repo" run-item14 "$BRIEF" 2>&1)
 code=$?
-assert_eq 0 "$code" "item 14: cache-token happy path exits 0"
+assert_locked_build_ok "$code" "$out" "item 14: cache-token happy path exits 0"
 ledger="$kit_home/ledger.tsv"
 if [ -f "$ledger" ]; then
   ledger_line=$(grep -F "run-item14" "$ledger")
@@ -686,7 +776,7 @@ repo=$(mk_src_repo)
 no_usage_claude=$(mk_native_claude_no_usage)
 out=$(run_locked_build "$kit_home" "$no_usage_claude" "$keychain_hit" "$repo" run-item9 "$BRIEF" 2>&1)
 code=$?
-assert_eq 0 "$code" "item 9: no-usage happy path exits 0"
+assert_locked_build_ok "$code" "$out" "item 9: no-usage happy path exits 0"
 ledger="$kit_home/ledger.tsv"
 if [ -f "$ledger" ]; then
   ledger_line=$(grep -F "run-item9" "$ledger")
@@ -710,7 +800,7 @@ out=$(env -u USER ROUTING_KIT_HOME="$kit_home" \
       GATE_TEST_UPSTREAM_INSECURE=1 \
       bash "$LOCKED_BUILD" --provider kimi --repo "$repo" --name run-item15 --brief "$BRIEF" 2>&1)
 code=$?
-assert_eq 0 "$code" "item 15: locked-build still succeeds with no USER in the environment"
+assert_locked_build_ok "$code" "$out" "item 15: locked-build still succeeds with no USER in the environment"
 assert_contains "$out" "CANARY SUMMARY" "item 15: the canaries still ran with no USER in the environment"
 
 # --- item 16/17: a canary forced to "succeed" ONLY on the SECOND
@@ -725,6 +815,9 @@ out=$(KIT_CANARY_FORCE_SUCCEED="read real-home marker" \
       run_locked_build "$kit_home" "$claude_link" "$keychain_hit" "$repo" run-item16 "$BRIEF" 2>&1)
 code=$?
 assert_eq 5 "$code" "item 16: a leak caught only on the final-profile canary run exits 5"
+if [ "$code" != 5 ]; then
+  printf '%s\n' "$out" | grep -E '^CANARY|canary check failed|lockdown' >&2
+fi
 run_dir=$(find "$kit_home/runs" -maxdepth 1 -name '*run-item16*' 2>/dev/null | head -1)
 if [ -z "$run_dir" ]; then
   fail "item 16: could not find the run dir"
@@ -767,7 +860,7 @@ out=$(run_locked_build "$kit_home" "$fd_probe_claude" "$keychain_hit" "$repo" ru
 code=$?
 exec 8<&-
 exec 10<&-
-assert_eq 0 "$code" "item 5: fd-probe happy path exits 0"
+assert_locked_build_ok "$code" "$out" "item 5: fd-probe happy path exits 0"
 run_dir=$(find "$kit_home/runs" -maxdepth 1 -name '*run-item5fd*' 2>/dev/null | head -1)
 if [ -z "$run_dir" ]; then
   fail "item 5: could not find the run dir"

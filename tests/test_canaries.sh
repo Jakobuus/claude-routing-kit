@@ -241,6 +241,147 @@ else
   fail "a plain 'could not be found' line (without CreateFromAttributes) was accepted as a valid denial"
 fi
 
+# --- retry: a positive control that fails exactly once then recovers must
+# still report OK (via the retry), log the retry, and NOT count as either a
+# real failure or an environment failure -- this is the "slow box glitched
+# once, then it was fine" case the retry exists for. The jailed_cmd here
+# reads a real marker file under the real $HOME (same discipline every
+# other real-home probe in canaries.sh uses: a fixture outside the jail's
+# own wt, so a correct profile denies it), proving the retry's OK is a real
+# denial result, not a shortcut. -----------------------------------------
+retry_counter=$(mktmp)/counter
+echo 0 > "$retry_counter"
+retry_marker_dir=$(mktemp -d "$HOME/.routing-kit-test-retry-XXXXXX")
+printf 'retry-marker\n' > "$retry_marker_dir/marker"
+before_pass=$_CANARY_PASS; before_fail=$_CANARY_FAIL; before_env=$_CANARY_ENV_FAIL
+# Redirected to a file, not captured via $(...): a command substitution runs
+# in a subshell, which would update only that subshell's copy of
+# _CANARY_PASS/_CANARY_FAIL/_CANARY_ENV_FAIL and silently discard the
+# increment the moment the subshell exits -- this must run in THIS shell so
+# the counter assertions below see the real effect.
+retry_log=$(mktmp)/out
+_canary_denied "test transient positive control" \
+  "c=\$(cat '$retry_counter'); c=\$((c + 1)); printf '%s' \"\$c\" > '$retry_counter'; [ \"\$c\" -ge 2 ]" \
+  "cat '$retry_marker_dir/marker'" \
+  "$profile" > "$retry_log" 2>&1
+retry_out=$(cat "$retry_log")
+rm -rf "$retry_marker_dir"
+assert_contains "$retry_out" "CANARY RETRY test transient positive control (positive control)" \
+  "the first (failing) positive-control attempt is logged as a retry"
+assert_contains "$retry_out" "CANARY OK   test transient positive control" \
+  "the probe reports OK once the retry's positive control succeeds"
+assert_eq $((before_pass + 1)) "$_CANARY_PASS" "a recovered retry counts as one pass"
+assert_eq "$before_fail" "$_CANARY_FAIL" "a recovered retry must not also count as a fail"
+assert_eq "$before_env" "$_CANARY_ENV_FAIL" "a recovered retry must not also count as an env_fail"
+
+# --- retry: a positive control that NEVER recovers is an environment
+# problem (_CANARY_ENV_FAIL), not a lockdown failure (_CANARY_FAIL) -- a
+# real Seatbelt hole is deterministic; this fixture (routing-kit's own
+# `false`) failing twice says nothing about whether the jail leaked. -------
+before_pass=$_CANARY_PASS; before_fail=$_CANARY_FAIL; before_env=$_CANARY_ENV_FAIL
+envfail_log=$(mktmp)/out
+_canary_denied "test permanent positive control failure" "false" "true" "$profile" > "$envfail_log" 2>&1
+envfail_out=$(cat "$envfail_log")
+assert_contains "$envfail_out" "CANARY RETRY test permanent positive control failure (positive control)" \
+  "a permanently-broken positive control is still retried once before giving up"
+assert_contains "$envfail_out" "CANARY ENVFAIL test permanent positive control failure" \
+  "an unrecoverable positive control is reported as CANARY ENVFAIL, not CANARY FAIL"
+case "$envfail_out" in
+  *"CANARY FAIL test permanent positive control failure"*)
+    fail "an unrecoverable positive control was also counted as a real CANARY FAIL"
+    ;;
+  *) pass ;;
+esac
+assert_eq "$before_pass" "$_CANARY_PASS" "an unrecoverable positive control must not count as a pass"
+assert_eq "$before_fail" "$_CANARY_FAIL" "an unrecoverable positive control must not count as a real fail"
+assert_eq $((before_env + 1)) "$_CANARY_ENV_FAIL" "an unrecoverable positive control counts as exactly one env_fail"
+
+# --- security review (30/09), HIGH: a jailed success (the jail allowed
+# something it must deny -- a real leak) must be an irreversible FAIL,
+# recorded on the very first and only attempt. The jailed probe must NEVER
+# be retried: the prior form retried it, and a mocked reproduction showed
+# that retrying could erase an observed leak outright (success-then-denial
+# became a silent PASS) or launder it into an environment problem
+# (success-then-failed-positive-control became ENVFAIL, i.e. exit 4
+# instead of 5). Both scenarios below are built WITHOUT the
+# KIT_CANARY_FORCE_SUCCEED hook -- real commands, not the test-only force
+# path -- specifically because the hook was already known to skip retries;
+# the point is proving the real, un-hooked code path never retries a
+# jailed success either. --------------------------------------------------
+
+# success -> denial: jailed_cmd allows (exit 0) on its first and only call;
+# it is built so a SECOND call (which must never happen) would instead deny
+# (exit 1). If the jailed probe were retried, this would read back as a
+# clean PASS -- proving the fix means it still reads back as a FAIL.
+#
+# security review (round 2): the counter file MUST live inside $wt, the one
+# path the profile actually allows read/write on from inside the jail --
+# the prior form put it under a bare mktmp dir outside $wt, so the jailed
+# command's own write to it was itself denied by the profile, and the
+# counter could never actually persist across what would have been a
+# second jailed invocation. That made the test's claim ("a hypothetical
+# retry would have denied it") untested: with the write denied, `c` was
+# never really being incremented in a way this probe's own jailed process
+# could observe. Using $wt plus an explicit "ran exactly once" assertion on
+# the counter's final value turns this into a real regression test: if a
+# retry were ever reintroduced, the counter would read back 2, not 1.
+leak_counter="$wt/.rk-test-leak-counter"
+rm -f "$leak_counter"
+echo 0 > "$leak_counter"
+before_pass=$_CANARY_PASS; before_fail=$_CANARY_FAIL; before_env=$_CANARY_ENV_FAIL
+leak_log=$(mktmp)/out
+_canary_denied "test success then denial must not be retried" \
+  "true" \
+  "c=\$(cat '$leak_counter'); c=\$((c + 1)); printf '%s' \"\$c\" > '$leak_counter'; [ \"\$c\" -eq 1 ]" \
+  "$profile" > "$leak_log" 2>&1
+leak_out=$(cat "$leak_log")
+assert_contains "$leak_out" "CANARY FAIL test success then denial must not be retried" \
+  "a jailed success is reported as FAIL even though a hypothetical retry would have denied it"
+case "$leak_out" in
+  *"CANARY RETRY test success then denial must not be retried"*"jailed probe"*)
+    fail "a jailed success was retried instead of being recorded on the first attempt"
+    ;;
+  *) pass ;;
+esac
+assert_eq "$before_pass" "$_CANARY_PASS" "a jailed success must never count as a pass"
+assert_eq $((before_fail + 1)) "$_CANARY_FAIL" "a jailed success counts as exactly one real fail"
+assert_eq "$before_env" "$_CANARY_ENV_FAIL" "a jailed success must never become an env_fail"
+leak_counter_final=$(cat "$leak_counter" 2>/dev/null)
+assert_eq 1 "$leak_counter_final" "the jailed probe actually ran exactly once (counter persisted inside wt, no retry)"
+rm -f "$leak_counter"
+
+# success -> a positive control that would fail on any further call:
+# positive_cmd succeeds exactly once (consumed by the one, required
+# pre-jail check) and would fail every time after -- proving the positive
+# control is never re-consulted once the jail has already shown a leak, so
+# a leak can never be laundered into ENVFAIL by anything that runs
+# afterward.
+pos_counter=$(mktmp)/poscounter
+echo 0 > "$pos_counter"
+before_pass=$_CANARY_PASS; before_fail=$_CANARY_FAIL; before_env=$_CANARY_ENV_FAIL
+leak2_log=$(mktmp)/out
+_canary_denied "test success then failed positive control must stay FAIL" \
+  "c=\$(cat '$pos_counter'); c=\$((c + 1)); printf '%s' \"\$c\" > '$pos_counter'; [ \"\$c\" -le 1 ]" \
+  "true" \
+  "$profile" > "$leak2_log" 2>&1
+leak2_out=$(cat "$leak2_log")
+assert_contains "$leak2_out" "CANARY FAIL test success then failed positive control must stay FAIL" \
+  "a jailed success stays a real FAIL even when a later positive-control call would have failed"
+assert_eq "$before_pass" "$_CANARY_PASS" "a jailed success must never count as a pass (positive-control variant)"
+assert_eq $((before_fail + 1)) "$_CANARY_FAIL" "a jailed success counts as exactly one real fail (positive-control variant)"
+assert_eq "$before_env" "$_CANARY_ENV_FAIL" "a jailed success must never become env_fail via a later positive-control check"
+
+# --- KIT_CANARY_FORCE_SUCCEED is a deliberate, deterministic test hook, not
+# a flake: it must never be retried (retrying it would just waste the
+# test's own time for no behavior change, and would make the hook's log
+# output inconsistent with a real leak's). ----------------------------------
+case "$forced_out" in
+  *"CANARY RETRY read real-home marker"*)
+    fail "KIT_CANARY_FORCE_SUCCEED was retried instead of failing immediately"
+    ;;
+  *) pass ;;
+esac
+
 # --- regression: two concurrent canaries_run invocations must not race on
 # real-$HOME fixtures ---------------------------------------------------------
 # Reproduced directly (see canaries.sh's file header): before canary_dir and
@@ -345,6 +486,35 @@ done
 if [ "$conc_any_fail" -eq 0 ]; then
   pass
 fi
+
+# --- security review (30/09), MEDIUM: "reach the allowed loopback port"
+# must classify a profile that WRONGLY DENIES its own allowed port as a
+# real FAIL (a broken lockdown mechanism), never as env_fail -- a healthy,
+# reachable-from-outside-the-jail listener plus a jailed failure against it
+# is exactly "the profile is broken", not "the environment is flaky".
+# wrong_profile is generated for a DIFFERENT port than the one canaries_run
+# is told to probe, so the plain (unjailed) curl check right before the
+# jailed probe succeeds (something real is listening on $port), but the
+# profile's own one-port allow-rule names the wrong number, so the JAILED
+# curl to $port is denied. ---------------------------------------------
+wrong_port_profile="$d/wrong-port-profile.sb"
+seatbelt_generate "$wrong_port_profile" "$wt" "$run_home" "$run_cfg" "$run_tmp" "$claude_bin" "$((port + 777))"
+wrong_port_out=$(KIT_CANARY_PID_FILE="$(mktmp)/pids.txt" canaries_run "$wrong_port_profile" "$wt" "$src" "$port" quick)
+wrong_port_code=$?
+assert_eq 1 "$wrong_port_code" "a profile that denies its own allowed port makes canaries_run report failure"
+assert_contains "$wrong_port_out" "CANARY FAIL reach the allowed loopback port" \
+  "a profile denying the allowed port is a real FAIL for that probe"
+case "$wrong_port_out" in
+  *"CANARY ENVFAIL reach the allowed loopback port"*)
+    fail "a profile denying its own allowed port was misclassified as an environment problem (env_fail), not a real FAIL"
+    ;;
+  *) pass ;;
+esac
+assert_contains "$wrong_port_out" "CANARY SUMMARY pass=" "the run still prints a summary line despite the broken profile"
+case "$wrong_port_out" in
+  *" env_fail=0"*) pass ;;
+  *) fail "a profile denying its own allowed port produced a nonzero env_fail (expected 0, this must be a real fail): $wrong_port_out" ;;
+esac
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

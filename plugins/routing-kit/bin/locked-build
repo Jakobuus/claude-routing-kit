@@ -137,6 +137,7 @@ run_cfg="$(kit_realpath "$run_cfg")"
 run_tmp="$(kit_realpath "$run_tmp")"
 wt="$(kit_realpath "$wt")"
 
+
 # --- Step 6: profile + Step 7: canaries, against a scratch port -------------
 # The gate's real port is only known once it starts (lib/gate.py always
 # binds an OS-chosen ephemeral port; it has no --port flag to pin one in
@@ -147,27 +148,83 @@ wt="$(kit_realpath "$wt")"
 # allow-network-outbound-to-one-port rule seatbelt_generate writes is
 # identical in shape either way, only the number differs, and that number
 # is substituted mechanically once the real gate is up (see below).
-scratch_port=$(/usr/bin/python3 -c '
-import socket
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.bind(("127.0.0.1", 0))
-print(s.getsockname()[1])
-s.close()
-')
-[ -n "$scratch_port" ] || kit_die 4 "could not reserve a scratch port for canaries"
+#
+# This port stays bound and listening from the moment it's chosen until the
+# scratch-port canary round finishes, instead of the prior bind -> read the
+# number -> close() -> reuse the number later pattern. That old pattern had
+# a real TOCTOU gap: once closed, nothing kept any other process on the
+# machine (a concurrent locked-build run, a concurrent kit-selftest, even
+# something unrelated) from grabbing that exact ephemeral port before
+# canaries_run's own "reach the allowed loopback port" probe got around to
+# binding its stub there -- a transient, load-dependent collision that
+# surfaces as a plain canary FAIL/exit 5, indistinguishable from a real
+# lockdown leak (this is the "port churn" flake CI hit). canaries_run
+# already has a fallback for "something is already listening on $port" --
+# it's what the final, real-gate canary round relies on -- so reusing that
+# path here (keep a stub listening throughout) closes the gap outright
+# instead of racing around it.
+scratch_port_file="$run_dir/scratch-port"
+/usr/bin/python3 -c '
+import http.server, socketserver, sys
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(403)
+        self.end_headers()
+    def log_message(self, *a):
+        pass
+socketserver.TCPServer.allow_reuse_address = True
+httpd = socketserver.TCPServer(("127.0.0.1", 0), H)
+with open(sys.argv[1], "w") as f:
+    f.write(str(httpd.server_address[1]))
+httpd.serve_forever()
+' "$scratch_port_file" >/dev/null 2>&1 &
+scratch_pid=$!
+
+i=0
+while [ ! -s "$scratch_port_file" ]; do
+  i=$((i + 1))
+  if [ "$i" -gt 100 ]; then
+    kill "$scratch_pid" 2>/dev/null
+    wait "$scratch_pid" 2>/dev/null
+    kit_die 4 "could not reserve a scratch port for canaries"
+  fi
+  sleep 0.05
+done
+scratch_port=$(cat "$scratch_port_file")
+if [ -z "$scratch_port" ]; then
+  kill "$scratch_pid" 2>/dev/null
+  wait "$scratch_pid" 2>/dev/null
+  kit_die 4 "could not reserve a scratch port for canaries"
+fi
 
 canary_profile="$run_dir/canary-profile.sb"
 seatbelt_generate "$canary_profile" "$wt" "$run_home" "$run_cfg" "$run_tmp" "$claude_bin" "$scratch_port"
 seatbelt_code=$?
-[ "$seatbelt_code" -eq 0 ] || exit "$seatbelt_code"
+if [ "$seatbelt_code" -ne 0 ]; then
+  kill "$scratch_pid" 2>/dev/null
+  wait "$scratch_pid" 2>/dev/null
+  exit "$seatbelt_code"
+fi
 
 canary_log="$run_dir/canaries.log"
 canaries_run "$canary_profile" "$wt" "$repo" "$scratch_port" quick > "$canary_log" 2>&1
 canary_code=$?
+# Only torn down now, after canaries_run's own loopback-port probe has
+# already used it (or found it already listening and used it directly) --
+# never before, which is exactly the gap this replaces.
+kill "$scratch_pid" 2>/dev/null
+wait "$scratch_pid" 2>/dev/null
 cat "$canary_log"
-if [ "$canary_code" -ne 0 ]; then
-  kit_die 5 "canary check failed (see $canary_log); provider never contacted, gate never started"
-fi
+# Validated unconditionally, not only when canary_code != 0: a status of 0
+# with a log that doesn't actually back that up (missing/malformed/
+# self-contradictory summary) must not be silently treated as success
+# either (security review, round 2).
+canary_verdict=$(kit_canary_verdict "$canary_log" "$canary_code")
+case "$canary_verdict" in
+  0) : ;;
+  4) kit_die 4 "canary environment problem (see $canary_log); provider never contacted, gate never started" ;;
+  *) kit_die 5 "canary check failed (see $canary_log); provider never contacted, gate never started" ;;
+esac
 
 # --- Step 8: start the gate now that canaries passed; learn its real port ---
 gate_port_file="$run_dir/gate-port"
@@ -184,22 +241,32 @@ cleanup() {
   # This only ever does real work if the script itself is cut short by a
   # signal (e.g. an outer caller's own timeout, or Ctrl-C) while claude_pid/
   # timer_pid are still live and inside the `set -m` window below -- the
-  # normal exit path already clears both to "" before it returns, and the
-  # main flow always `wait`s a killed job immediately after killing it. This
-  # trap must follow the same discipline: killing a job under job control
-  # without an immediate matching `wait` is exactly what makes bash print an
-  # asynchronous "Terminated: ..." job-control notice on this script's
-  # stderr, since nothing here ever reaps the pid otherwise.
+  # normal exit path already clears both to "" before it returns.
+  #
+  # Each kill+wait pair below is wrapped in its own `{ ...; } 2>/dev/null`
+  # group, not a per-command redirect on just the final `wait`. Confirmed by
+  # direct reproduction (not just reasoning): bash's asynchronous
+  # "Terminated: ..." job-control notice is printed by the shell's own
+  # job-check logic, which can fire between any two commands in this block
+  # (e.g. right after the `kill`, before `wait` even runs) -- it is NOT part
+  # of either command's own output, so `kill ... 2>/dev/null` alone does
+  # nothing for it, and only a redirect spanning the whole window during
+  # which the job can die catches it. A `{ group; }` (no subshell) keeps fd 2
+  # redirected to /dev/null for every command inside, including bash's own
+  # notification checks between them, for as long as the group is executing.
   if [ -n "$claude_pid" ]; then
-    kill -TERM -"$claude_pid" 2>/dev/null || kill "$claude_pid" 2>/dev/null
-    wait "$claude_pid" 2>/dev/null
+    {
+      kill -TERM -"$claude_pid" 2>/dev/null || kill "$claude_pid" 2>/dev/null
+      wait "$claude_pid"
+    } 2>/dev/null
   fi
   if [ -n "$timer_pid" ]; then
-    kill "$timer_pid" 2>/dev/null
-    wait "$timer_pid" 2>/dev/null
+    {
+      kill "$timer_pid" 2>/dev/null
+      wait "$timer_pid"
+    } 2>/dev/null
   fi
-  kill "$gate_pid" 2>/dev/null
-  wait "$gate_pid" 2>/dev/null
+  { kill "$gate_pid" 2>/dev/null; wait "$gate_pid"; } 2>/dev/null
 }
 trap cleanup EXIT
 
@@ -227,9 +294,13 @@ final_canary_log="$run_dir/canaries-final.log"
 canaries_run "$profile_sb" "$wt" "$repo" "$gate_port" quick > "$final_canary_log" 2>&1
 final_canary_code=$?
 cat "$final_canary_log"
-if [ "$final_canary_code" -ne 0 ]; then
-  kit_die 5 "final-profile canary check failed (see $final_canary_log); provider never contacted, build never started"
-fi
+# Validated unconditionally, same as the scratch-round check above.
+final_canary_verdict=$(kit_canary_verdict "$final_canary_log" "$final_canary_code")
+case "$final_canary_verdict" in
+  0) : ;;
+  4) kit_die 4 "final-profile canary environment problem (see $final_canary_log); provider never contacted, build never started" ;;
+  *) kit_die 5 "final-profile canary check failed (see $final_canary_log); provider never contacted, build never started" ;;
+esac
 
 # --- Step 9: run the real (jailed) build -------------------------------------
 # ANTHROPIC_DEFAULT_HAIKU_MODEL (formerly ANTHROPIC_SMALL_FAST_MODEL, per
@@ -303,17 +374,34 @@ claude_raw_code=$?
 # timeout path and could keep writing to wt right up until (or after) the
 # diff below is taken. TERM the whole group, give it a short grace period,
 # then KILL whatever's left -- in both cases, before `git add` ever runs.
-kill -TERM -"$claude_pid" 2>/dev/null
-sleep 0.3
-kill -KILL -"$claude_pid" 2>/dev/null
+#
+# Item 8: everything from here down that can kill a still-live job (claude's
+# process group a second time, then the timer) is one `{ ...; } 2>/dev/null`
+# group, not separate per-command redirects. Reproduced directly: bash's
+# asynchronous "Terminated: ..." job-control notice is printed by the
+# shell's own between-commands job check, not as output of the `kill` or
+# `wait` command itself -- under load, the plain gap between two sequential
+# `kill` builtins (TERM, then KILL, each its own fork+exec) was enough for
+# that check to fire and print to this script's real stderr before the
+# following `wait` ever ran, so a `2>/dev/null` on the `wait` alone did not
+# catch it (confirmed with and without the fix, with an injected delay to
+# force the race deterministically). A `{ group; }` keeps fd 2 redirected
+# for every command inside it, including bash's own checks between them, for
+# the whole time the group runs -- claude_raw_code was already captured from
+# the first `wait` above, so nothing in here needs its own exit status.
+{
+  kill -TERM -"$claude_pid" 2>/dev/null
+  sleep 0.3
+  kill -KILL -"$claude_pid" 2>/dev/null
 
-# The timer's own `sleep "$timeout_secs"` is a distinct child process
-# inside the timer subshell's group (same pgid, no separate setpgid), so
-# killing the group reaches it too; TERM then KILL, same discipline as
-# above, so a timer that's mid-sleep can't outlive this script either.
-kill -TERM -"$timer_pid" 2>/dev/null
-kill -KILL -"$timer_pid" 2>/dev/null
-wait "$timer_pid" 2>/dev/null
+  # The timer's own `sleep "$timeout_secs"` is a distinct child process
+  # inside the timer subshell's group (same pgid, no separate setpgid), so
+  # killing the group reaches it too; TERM then KILL, same discipline as
+  # above, so a timer that's mid-sleep can't outlive this script either.
+  kill -TERM -"$timer_pid" 2>/dev/null
+  kill -KILL -"$timer_pid" 2>/dev/null
+  wait "$timer_pid"
+} 2>/dev/null
 claude_pid=""
 timer_pid=""
 set +m

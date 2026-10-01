@@ -248,5 +248,88 @@ case "$out" in
   *) pass ;;
 esac
 
+# --- kit_canary_verdict: validates lib/canaries.sh's own "CANARY SUMMARY
+# pass=N fail=N env_fail=N" line against the real canaries_run exit status
+# and returns 0 (proceed), 4 (environment problem), or 5 (refuse). A real
+# leak (fail>0) must always win 5, even alongside an env_fail; an
+# unrecoverable environment problem alone (fail=0, env_fail>0, status !=0)
+# must be 4, not 5 -- that is the entire point (locked-build must not
+# report "lockdown failed" when nothing actually leaked); anything
+# unreadable, or inconsistent with the status, defaults to the stricter 5.
+# Called on every round, including a clean one (status 0): that must be
+# backed by an all-zero summary, or it is also refused (security review,
+# round 2). The cases below are the exact ones security review reported
+# across both rounds.
+. "$KC"
+
+log=$(mktmp)/log
+printf 'CANARY OK   x\nCANARY SUMMARY pass=5 fail=0 env_fail=0\n' > "$log"
+assert_eq 0 "$(kit_canary_verdict "$log" 0)" "status 0 with a clean (all-zero) summary is verdict 0, proceed"
+
+printf 'CANARY SUMMARY pass=5 fail=1 env_fail=0\n' > "$log"
+assert_eq 5 "$(kit_canary_verdict "$log" 1)" "a real leak (fail=1) is exit 5"
+
+printf 'CANARY SUMMARY pass=5 fail=0 env_fail=2\n' > "$log"
+assert_eq 4 "$(kit_canary_verdict "$log" 1)" "env_fail alone (fail=0) is exit 4, not 5"
+
+printf 'CANARY SUMMARY pass=5 fail=1 env_fail=2\n' > "$log"
+assert_eq 5 "$(kit_canary_verdict "$log" 1)" "a real leak alongside an env_fail still wins 5"
+
+: > "$log"
+assert_eq 5 "$(kit_canary_verdict "$log" 1)" "a missing CANARY SUMMARY line defaults to 5, not a false 4"
+
+# --- security review (round 1): a STATUS of 0 must be backed by an
+# all-zero summary -- a log that would otherwise look like env_fail is
+# refused outright (5), not silently accepted as clean (0) or
+# misread as an environment problem (4). ------------------------------------
+printf 'CANARY SUMMARY pass=5 fail=0 env_fail=2\n' > "$log"
+assert_eq 5 "$(kit_canary_verdict "$log" 0)" "status 0 with a non-zero summary is inconsistent -> 5, never 0 or 4"
+
+# --- security review (round 1): "fail=0garbage" -- a loose ".* fail="
+# pattern (digit then ANY characters) previously accepted this and misread
+# env_fail as if it were fail. -----------------------------------------
+printf 'CANARY SUMMARY pass=5 fail=0garbage env_fail=2\n' > "$log"
+assert_eq 5 "$(kit_canary_verdict "$log" 1)" "a non-numeric fail field (fail=0garbage) is malformed -> 5, never 4"
+
+# --- security review (round 1): a duplicated/conflicting fail field. The
+# whole-line format check must reject this outright, not pick whichever
+# "fail=" a regex happened to match. -------------------------------------
+printf 'CANARY SUMMARY pass=5 fail=1 fail=0 env_fail=0\n' > "$log"
+assert_eq 5 "$(kit_canary_verdict "$log" 1)" "a duplicated fail field is malformed -> 5, never a false 4"
+
+# --- security review (round 2): "CANARY SUMMARYjunk ... fail=1 ..." must
+# still be counted as a CANDIDATE line (no space required in the match),
+# even though it's not itself well-formed -- so that a log containing this
+# junk line PLUS one otherwise-valid env-only summary is rejected outright
+# (more than one candidate line) instead of silently picking the valid-
+# looking one and returning a false 4. Reproduced by security review: the
+# prior match required a literal space after "SUMMARY", which "SUMMARYjunk"
+# doesn't have, so it was invisible to the line count. -----------------
+printf 'CANARY SUMMARY pass=5 fail=0 env_fail=2\n' > "$log"
+assert_eq 4 "$(kit_canary_verdict "$log" 1)" "sanity: the valid env-only summary alone is still exit 4"
+printf 'CANARY SUMMARYjunk ... fail=1 ...\nCANARY SUMMARY pass=5 fail=0 env_fail=2\n' > "$log"
+assert_eq 5 "$(kit_canary_verdict "$log" 1)" "a junk 'CANARY SUMMARY...' line alongside a valid one is refused (5), never the valid line's 4"
+printf 'CANARY SUMMARYjunk pass=5 fail=0 env_fail=2\n' > "$log"
+assert_eq 5 "$(kit_canary_verdict "$log" 1)" "CANARY SUMMARYjunk alone (no space, not well-formed) is also 5"
+
+# --- two well-formed summary lines in one log (e.g. a caller accidentally
+# concatenated two runs) -- must refuse to pick either one. -----------------
+printf 'CANARY SUMMARY pass=5 fail=0 env_fail=2\nCANARY SUMMARY pass=3 fail=0 env_fail=1\n' > "$log"
+assert_eq 5 "$(kit_canary_verdict "$log" 1)" "more than one CANARY SUMMARY line -> 5, never guesses which one"
+
+# --- status says the round failed, but the summary claims nothing failed
+# at all -- contradicts canaries_run's own return convention and must not
+# be trusted either way. -----------------------------------------------------
+printf 'CANARY SUMMARY pass=5 fail=0 env_fail=0\n' > "$log"
+assert_eq 5 "$(kit_canary_verdict "$log" 1)" "nonzero status with an all-zero summary is self-contradictory -> 5"
+
+# --- security review (round 2): status 0 validated too -- a missing or
+# malformed summary alongside a clean status must still be refused, not
+# silently treated as success. ----------------------------------------------
+: > "$log"
+assert_eq 5 "$(kit_canary_verdict "$log" 0)" "status 0 with no summary line at all -> 5, never a silent 0"
+printf 'CANARY SUMMARY pass=5 fail=0garbage env_fail=0\n' > "$log"
+assert_eq 5 "$(kit_canary_verdict "$log" 0)" "status 0 with a malformed summary -> 5, never a silent 0"
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

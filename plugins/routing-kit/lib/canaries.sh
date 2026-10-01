@@ -42,12 +42,18 @@
 # repo's gitignored-file probe; used by locked-build before every run) or
 # "full" (every probe; used by tests/test_canaries.sh and kit-selftest).
 #
-# Prints one "CANARY OK ..." or "CANARY FAIL ..." line per probe to stdout,
-# then a final "CANARY SUMMARY pass=N fail=N" line. Returns 0 (shell true)
-# if every probe passed, 1 (shell false) if any failed (including a broken
-# positive control) -- callers such as locked-build turn that into their
-# own exit 5, since "5 = lockdown/secret-scan refusal" is a whole-program
-# exit-code convention this library doesn't own.
+# Prints one "CANARY OK ...", "CANARY FAIL ...", "CANARY ENVFAIL ..." or
+# "CANARY RETRY ..." line per probe/attempt to stdout, then a final "CANARY
+# SUMMARY pass=N fail=N env_fail=N" line. Returns 0 (shell true) only if
+# fail and env_fail are both 0, 1 (shell false) otherwise. "fail" is a real
+# Seatbelt leak (the jail allowed something it must deny) -- deterministic,
+# never retried away. "env_fail" is a positive control or a probe's own
+# listener that was STILL broken after one retry -- an environment problem
+# (port churn, a slow box), not a lockdown result either way. A caller such
+# as locked-build must map "fail" to its own exit 5 (lockdown/secret-scan
+# refusal) and "env_fail" (with fail==0) to its own exit 4 (environment
+# problem) -- both are whole-program exit-code conventions this library
+# doesn't own.
 
 CANARIES_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 . "$CANARIES_LIB_DIR/../bin/kit-common"
@@ -63,6 +69,11 @@ _CANARY_KEYCHAIN_DENIAL_PATTERN='*SecKeychainSearchCreateFromAttributes*'
 
 _CANARY_PASS=0
 _CANARY_FAIL=0
+# A positive control (or a listener a probe depends on) that's STILL broken
+# after one retry: counted apart from _CANARY_FAIL so a caller can tell
+# "the lockdown has a hole" from "this canary's own fixture couldn't be set
+# up right now" -- see _canary_env_fail below.
+_CANARY_ENV_FAIL=0
 # Counts invocations of canaries_run within this sourced-in process (see
 # KIT_CANARY_FORCE_SUCCEED_CALL above). Deliberately a top-level global,
 # not local to canaries_run, so it persists across locked-build's two
@@ -77,6 +88,27 @@ _canary_ok() {
 _canary_fail() {
   _CANARY_FAIL=$((_CANARY_FAIL + 1))
   printf 'CANARY FAIL %s: %s\n' "$1" "$2"
+}
+
+# _canary_env_fail NAME REASON — a positive control (run OUTSIDE the jail,
+# no Seatbelt involved at all) or a probe's own listener that's still broken
+# after a retry. A real Seatbelt hole is deterministic: the jail either
+# denies the thing or it doesn't, every time. A positive control or listener
+# that won't come up says nothing about that either way -- it means this
+# canary's own fixture is broken right now (a port churn race, a slow box,
+# the machine under load), not that something leaked. Counted separately so
+# locked-build can report this as exit 4 (environment problem) instead of
+# exit 5 (lockdown refusal) when nothing else failed.
+_canary_env_fail() {
+  _CANARY_ENV_FAIL=$((_CANARY_ENV_FAIL + 1))
+  printf 'CANARY ENVFAIL %s: %s\n' "$1" "$2"
+}
+
+# _canary_retry_note NAME WHAT REASON — logged once per retry so the CI log
+# shows that a canary needed a second attempt, and why, even when the retry
+# then succeeds and nothing else ever surfaces the first attempt's failure.
+_canary_retry_note() {
+  printf 'CANARY RETRY %s (%s): %s\n' "$1" "$2" "$3"
 }
 
 # _canary_record_pid PID — appends PID to $KIT_CANARY_PID_FILE, if the
@@ -110,16 +142,23 @@ _canary_record_pid() {
 # what lets a test simulate item 16 -- a hole that exists only in the
 # FINAL profile -- distinctly from item 7's "any leak, first check,
 # before the gate ever starts" scenario.
+#
+# KIT_CANARY_FORCE_POS_FAIL, a test-only hook: when it equals NAME, the
+# positive control is treated as having failed on every attempt (no
+# recovery, ever) -- this lets a test drive an unrecoverable positive
+# control (and the resulting env_fail / locked-build exit 4) through the
+# real canaries_run/locked-build flow, not just a direct _canary_denied call.
+#
+# KIT_CANARY_FORCE_POS_FAIL_CALL, an optional companion hook mirroring
+# KIT_CANARY_FORCE_SUCCEED_CALL: when set, the forced positive-control
+# failure only applies on that Nth call to canaries_run within this
+# process -- this is what lets a test simulate an environment problem on
+# only the FINAL-profile canary round (after the gate has already started),
+# distinctly from a problem on the first, scratch-port round.
 _canary_denied() {
   local name positive_cmd jailed_cmd profile extra_pattern pos_out pos_code jail_out jail_code force
+  local attempt denied force_pos_fail
   name="$1"; positive_cmd="$2"; jailed_cmd="$3"; profile="$4"; extra_pattern="${5:-}"
-
-  pos_out=$(/bin/sh -c "$positive_cmd" 2>&1)
-  pos_code=$?
-  if [ "$pos_code" -ne 0 ]; then
-    _canary_fail "$name" "positive control failed outside the jail (exit $pos_code): $pos_out"
-    return
-  fi
 
   force=0
   if [ "${KIT_CANARY_FORCE_SUCCEED:-}" = "$name" ]; then
@@ -127,7 +166,54 @@ _canary_denied() {
       force=1
     fi
   fi
+  # Test-only hook, the positive-control counterpart to KIT_CANARY_FORCE_SUCCEED:
+  # forces the positive control to fail on every attempt (no recovery), so a
+  # test can exercise an unrecoverable positive control -- and the resulting
+  # env_fail/exit-4 path -- through the real canaries_run/locked-build flow,
+  # not just by calling _canary_denied directly.
+  force_pos_fail=0
+  if [ "${KIT_CANARY_FORCE_POS_FAIL:-}" = "$name" ]; then
+    if [ -z "${KIT_CANARY_FORCE_POS_FAIL_CALL:-}" ] || [ "${KIT_CANARY_FORCE_POS_FAIL_CALL}" = "$_CANARIES_CALL_COUNT" ]; then
+      force_pos_fail=1
+    fi
+  fi
 
+  # The positive control runs OUTSIDE the jail: a Seatbelt verdict is not
+  # involved at all, so a transient failure there (the fixture glitching, a
+  # slow box) genuinely is not a security result either way, and one retry
+  # is safe. See _canary_env_fail.
+  attempt=1
+  while :; do
+    if [ "$force_pos_fail" -eq 1 ]; then
+      pos_out="forced failure via KIT_CANARY_FORCE_POS_FAIL (test hook)"
+      pos_code=1
+    else
+      pos_out=$(/bin/sh -c "$positive_cmd" 2>&1)
+      pos_code=$?
+    fi
+    if [ "$pos_code" -ne 0 ]; then
+      if [ "$attempt" -eq 1 ]; then
+        _canary_retry_note "$name" "positive control" "exit $pos_code: $pos_out"
+        sleep 0.3
+        attempt=2
+        continue
+      fi
+      _canary_env_fail "$name" "positive control failed outside the jail (exit $pos_code): $pos_out"
+      return
+    fi
+    break
+  done
+
+  # The jailed probe runs EXACTLY ONCE, no matter what, and its outcome is
+  # final: a real Seatbelt hole is deterministic, so retrying it would let a
+  # second attempt's outcome erase or soften an already-observed leak --
+  # reported by security review (30/09) and reproduced against the prior
+  # retrying form: a jailed command that allowed the operation on the first
+  # try and would have been denied on a second was turning into a silent
+  # PASS once retried. A jailed success is recorded as FAIL immediately,
+  # before anything else runs or is re-checked, and NEVER becomes env_fail:
+  # "the jail let something through it must deny" is never an environment
+  # problem, however it happened.
   if [ "$force" -eq 1 ]; then
     jail_out="forced success via KIT_CANARY_FORCE_SUCCEED (test hook)"
     jail_code=0
@@ -144,21 +230,28 @@ _canary_denied() {
     _canary_fail "$name" "jail allowed it (expected a denial): $jail_out"
     return
   fi
+
+  denied=0
   if [ -n "$extra_pattern" ]; then
     case "$jail_out" in
-      $extra_pattern) _canary_ok "$name"; return ;;
+      $extra_pattern) denied=1 ;;
     esac
   fi
-  case "$jail_out" in
-    *"Operation not permitted"*|*"operation not permitted"*|*"Permission denied"*|*"permission denied"* \
-      |*"Connection refused"*|*"connection refused"*|*"Couldn't connect"*|*"couldn't connect"* \
-      |*"could not connect"*|*"Network is unreachable"*|*"Connection timed out"*|*"timed out"*)
-      _canary_ok "$name"
-      ;;
-    *)
-      _canary_fail "$name" "denied, but without a permission/connection refusal message: $jail_out"
-      ;;
-  esac
+  if [ "$denied" -ne 1 ]; then
+    case "$jail_out" in
+      *"Operation not permitted"*|*"operation not permitted"*|*"Permission denied"*|*"permission denied"* \
+        |*"Connection refused"*|*"connection refused"*|*"Couldn't connect"*|*"couldn't connect"* \
+        |*"could not connect"*|*"Network is unreachable"*|*"Connection timed out"*|*"timed out"*)
+        denied=1
+        ;;
+    esac
+  fi
+
+  if [ "$denied" -eq 1 ]; then
+    _canary_ok "$name"
+  else
+    _canary_fail "$name" "denied, but without a permission/connection refusal message: $jail_out"
+  fi
 }
 
 # _canary_allowed NAME JAILED_CMD PROFILE — JAILED_CMD must succeed (exit 0)
@@ -245,10 +338,12 @@ canaries_run() {
   local rw_out rw_code grandchild_cmd pos_out jail_out gate_out gate_code
   local udp_port wt_sock wt_sock_pid _fd_probe ipv6_route_out
   local keychain_svc
+  local _alt_attempt _gate_attempt listener_ready
 
   profile="$1"; wt="$2"; src_repo="$3"; port="$4"; mode="${5:-quick}"
   _CANARY_PASS=0
   _CANARY_FAIL=0
+  _CANARY_ENV_FAIL=0
   _CANARIES_CALL_COUNT=$((_CANARIES_CALL_COUNT + 1))
 
   if [ -z "$profile" ] || [ -z "$wt" ] || [ -z "$port" ]; then
@@ -748,8 +843,15 @@ while True:
   rm -f "$wt/$wt_sock"
 
   # --- another loopback port (not the one the profile allows) ---------------
+  # Up to two attempts at getting the stub itself listening: a slow-starting
+  # python3 under load (never a real Seatbelt result either way) must not
+  # read the same as "the canary failed" -- see _canary_env_fail. Each
+  # attempt starts its own fresh listener rather than re-polling a stub that
+  # may itself have failed to bind.
   alt_port=$((port + 1))
-  /usr/bin/python3 -c "
+  _alt_attempt=1
+  while :; do
+    /usr/bin/python3 -c "
 import http.server, socketserver
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -761,15 +863,29 @@ socketserver.TCPServer.allow_reuse_address = True
 httpd = socketserver.TCPServer(('127.0.0.1', $alt_port), H)
 httpd.serve_forever()
 " >/dev/null 2>&1 &
-  alt_pid=$!
-  _canary_record_pid "$alt_pid"
-  if _canary_wait_for_port "$alt_port"; then
+    alt_pid=$!
+    _canary_record_pid "$alt_pid"
+    if _canary_wait_for_port "$alt_port"; then
+      break
+    fi
+    kill "$alt_pid" 2>/dev/null
+    wait "$alt_pid" 2>/dev/null
+    alt_pid=""
+    if [ "$_alt_attempt" -eq 1 ]; then
+      _canary_retry_note "curl another loopback port" "listener" "listener on port $alt_port never came up"
+      sleep 0.3
+      _alt_attempt=2
+      continue
+    fi
+    break
+  done
+  if [ -n "$alt_pid" ]; then
     _canary_denied "curl another loopback port" \
       "curl -sS --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$alt_port/" \
       "curl -sS --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$alt_port/" \
       "$profile"
   else
-    _canary_fail "curl another loopback port" "listener on port $alt_port never came up"
+    _canary_env_fail "curl another loopback port" "listener on port $alt_port never came up after a retry"
   fi
   kill "$alt_pid" 2>/dev/null
   wait "$alt_pid" 2>/dev/null
@@ -826,14 +942,36 @@ httpd.serve_forever()
   rm -f "$testfile"
 
   # --- must succeed: reaching the allowed port ------------------------------
+  # Listener health is established OUTSIDE the jail first, with its own
+  # retry (a slow-to-bind stub under load is an environment problem, not a
+  # Seatbelt result either way) -- only once a PLAIN, unjailed curl can
+  # already reach something on $port does the jailed probe run, and it runs
+  # EXACTLY ONCE. This ordering matters: the old form ran the jailed curl
+  # first and treated "no HTTP status" as ambiguous enough to retry and,
+  # on persistent failure, call it an environment problem -- but a profile
+  # that wrongly denies the very port it's supposed to allow produces
+  # exactly that same "no HTTP status" result every time, from inside the
+  # jail, against a perfectly healthy listener. That is not an environment
+  # problem, it is the lockdown mechanism itself being broken (reported by
+  # security review, 30/09) -- a jailed failure against a listener already
+  # proven healthy must be a real, deterministic FAIL (exit 5), never
+  # env_fail (exit 4).
+  #
   # If something is already listening on $port (locked-build's own re-check
   # of the FINAL profile, item 6, runs this against the real, already-
   # started gate), don't also try to bind our own stub there -- just probe
   # whatever's already there. A GET to "/" is denied (403) by the real gate
   # too, without forwarding anything upstream, so this stays provider-safe
   # either way.
-  if ! curl -s --max-time 1 -o /dev/null "http://127.0.0.1:$port/" >/dev/null 2>&1; then
-    /usr/bin/python3 -c "
+  listener_ready=0
+  _gate_attempt=1
+  while :; do
+    if curl -s --max-time 1 -o /dev/null "http://127.0.0.1:$port/" >/dev/null 2>&1; then
+      listener_ready=1
+      break
+    fi
+    if [ -z "$gate_pid" ]; then
+      /usr/bin/python3 -c "
 import http.server, socketserver
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -845,28 +983,53 @@ socketserver.TCPServer.allow_reuse_address = True
 httpd = socketserver.TCPServer(('127.0.0.1', $port), H)
 httpd.serve_forever()
 " >/dev/null 2>&1 &
-    gate_pid=$!
-    _canary_record_pid "$gate_pid"
-    _canary_wait_for_port "$port"
-  fi
-  gate_out=$(_canary_jail "$profile" "curl -s --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$port/")
-  gate_code=$?
-  kill "$gate_pid" 2>/dev/null
-  wait "$gate_pid" 2>/dev/null
-  gate_pid=""
-  case "$gate_out" in
-    [1-9][0-9][0-9])
-      if [ "$gate_code" -eq 0 ]; then
-        _canary_ok "reach the allowed loopback port (status $gate_out)"
-      else
-        _canary_fail "reach the allowed loopback port" "curl exited $gate_code despite a status line: $gate_out"
-      fi
-      ;;
-    *) _canary_fail "reach the allowed loopback port" "expected an HTTP status, got exit $gate_code: $gate_out" ;;
-  esac
+      gate_pid=$!
+      _canary_record_pid "$gate_pid"
+    fi
+    if _canary_wait_for_port "$port"; then
+      listener_ready=1
+      break
+    fi
+    if [ "$_gate_attempt" -eq 1 ]; then
+      kill "$gate_pid" 2>/dev/null
+      wait "$gate_pid" 2>/dev/null
+      gate_pid=""
+      _canary_retry_note "reach the allowed loopback port" "listener" "listener on port $port never came up"
+      sleep 0.3
+      _gate_attempt=2
+      continue
+    fi
+    break
+  done
 
-  printf 'CANARY SUMMARY pass=%s fail=%s\n' "$_CANARY_PASS" "$_CANARY_FAIL"
-  [ "$_CANARY_FAIL" -eq 0 ]
+  if [ "$listener_ready" -ne 1 ]; then
+    kill "$gate_pid" 2>/dev/null
+    wait "$gate_pid" 2>/dev/null
+    gate_pid=""
+    _canary_env_fail "reach the allowed loopback port" "listener on port $port never came up after a retry"
+  else
+    # Exactly one jailed attempt, against a listener already proven healthy
+    # above -- see the comment at the top of this block for why this must
+    # never be retried or reclassified as an environment problem.
+    gate_out=$(_canary_jail "$profile" "curl -s --max-time 3 -o /dev/null -w '%{http_code}' http://127.0.0.1:$port/")
+    gate_code=$?
+    kill "$gate_pid" 2>/dev/null
+    wait "$gate_pid" 2>/dev/null
+    gate_pid=""
+    case "$gate_out" in
+      [1-9][0-9][0-9])
+        if [ "$gate_code" -eq 0 ]; then
+          _canary_ok "reach the allowed loopback port (status $gate_out)"
+        else
+          _canary_fail "reach the allowed loopback port" "curl exited $gate_code despite a status line: $gate_out"
+        fi
+        ;;
+      *) _canary_fail "reach the allowed loopback port" "expected an HTTP status against a healthy listener, got exit $gate_code: $gate_out" ;;
+    esac
+  fi
+
+  printf 'CANARY SUMMARY pass=%s fail=%s env_fail=%s\n' "$_CANARY_PASS" "$_CANARY_FAIL" "$_CANARY_ENV_FAIL"
+  [ "$_CANARY_FAIL" -eq 0 ] && [ "$_CANARY_ENV_FAIL" -eq 0 ]
 }
 
 # Allow `bash canaries.sh PROFILE WT SRC_REPO PORT MODE` for manual/CI use.

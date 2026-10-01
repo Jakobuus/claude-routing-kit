@@ -31,6 +31,25 @@ assert_contains() {
   esac
 }
 
+# assert_locked_build_ok CODE OUT MSG -- asserts a locked-build invocation
+# that was expected to succeed (exit 0) actually did. A happy-path test that
+# instead got exit 5 tells you nothing about WHY on its own -- locked-build's
+# own canary log is already in OUT (locked-build cats it before kit_die), so
+# on failure this dumps every CANARY line from OUT to stderr, which is what
+# actually shows up in CI logs. Without this, "expected [0], got [5])" is the
+# only trace a flaky canary leaves behind, and there is no way to tell a real
+# lockdown leak from a flake (port churn, a slow positive control, ...)
+# without reproducing it by hand.
+assert_locked_build_ok() {
+  code="$1"; out="$2"; msg="$3"
+  if [ "$code" = "0" ]; then
+    pass
+  else
+    fail "$msg (expected [0], got [$code])"
+    printf '%s\n' "$out" | grep -E '^CANARY|canary check failed|lockdown' >&2
+  fi
+}
+
 # assert_exit CODE MSG -- CMD...
 assert_exit() {
   expected_code="$1"; msg="$2"

@@ -255,6 +255,12 @@ if [ "$code" -ne 0 ]; then
 else
   fail "a git add/diff failure after codex succeeded must not exit 0"
 fi
+# ... and the exported tree (even with a 000-mode .git) is deleted anyway.
+if [ -n "$run_dir" ] && [ ! -e "$run_dir/wt" ]; then
+  pass
+else
+  fail "the repo copy was not deleted after a git failure"
+fi
 
 # --- finding 5: a --name or --model with a tab/newline/CR is refused before
 # anything is logged, so it can never forge extra ledger rows or columns. -----
@@ -433,6 +439,262 @@ out=$(env KIT_TEST_NO_PYTHON3=1 PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="
 code=$?
 assert_eq 3 "$code" "codex build exits 3 when python3 is missing"
 assert_contains "$out" "install python3" "codex build gives the install-python3 hint, not a false secret-scan refusal"
+
+# === the repo copy is deleted when the run ends ===============================
+# bulk_gone RUN_DIR LABEL -- wt, home, cfg and tmp are all gone.
+bulk_gone() {
+  bg_left=""
+  for bg_d in wt home cfg tmp; do
+    [ -e "$1/$bg_d" ] && bg_left="$bg_left $bg_d"
+  done
+  if [ -z "$bg_left" ]; then pass; else fail "$2: still in the run dir:$bg_left"; fi
+}
+
+# a fake codex that fails (provider error)
+mk_fake_codex_bin_fails() {
+  bindir=$(mktmp)
+  cat > "$bindir/codex" <<'EOF'
+#!/bin/bash
+cat >/dev/null
+echo "boom: provider error"
+exit 1
+EOF
+  chmod +x "$bindir/codex"
+  echo "$bindir"
+}
+
+# --- success: bulk gone, build.patch is exactly the printed diff, logs kept ---
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
+out=$(env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name cleanrun --brief "$brief" 2>/dev/null)
+code=$?
+assert_eq 0 "$code" "cleanup: a normal run exits 0"
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+if [ -z "$run_dir" ]; then
+  fail "cleanup: no run dir found"
+else
+  bulk_gone "$run_dir" "cleanup: success"
+  if [ -f "$run_dir/build.patch" ]; then
+    printed=$(printf '%s\n' "$out" | sed '/^kit-codex-build: run dir: /,$d')
+    assert_eq "$(cat "$run_dir/build.patch")" "$printed" "cleanup: build.patch is exactly the printed diff"
+    assert_contains "$printed" "hello.txt" "cleanup: the printed diff has the new file"
+    case "$printed" in
+      "--- diff ---"*) fail "cleanup: the printed output gained a diff header" ;;
+      "diff --git"*) pass ;;
+      *) fail "cleanup: the printed output does not start with the raw diff" ;;
+    esac
+    if git -C "$src" apply --check "$run_dir/build.patch" 2>/dev/null; then pass; else fail "cleanup: build.patch does not apply to the source repo"; fi
+  else
+    fail "cleanup: build.patch was not written"
+  fi
+  assert_contains "$out" "kit-codex-build: run dir: $run_dir" "cleanup: run dir line unchanged"
+  assert_contains "$out" "kit-codex-build: build patch: $run_dir/build.patch" "cleanup: the patch path is printed"
+  for keep in brief.md codex-output.txt secret-scan.txt; do
+    if [ -f "$run_dir/$keep" ]; then pass; else fail "cleanup: $keep should survive in the run dir"; fi
+  done
+fi
+lines=$(grep -c $'\tcodex\t' "$home/ledger.tsv")
+assert_eq 1 "$lines" "cleanup: still exactly one ledger line"
+
+# --- ROUTING_KIT_KEEP_RUNS=1 keeps the copy and says where ---
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
+out=$(env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" ROUTING_KIT_KEEP_RUNS=1 \
+  "$BIN" --repo "$src" --name keeprun --brief "$brief" 2>&1)
+code=$?
+assert_eq 0 "$code" "keep-runs: exits 0"
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+if [ -f "$run_dir/wt/hello.txt" ] && [ -f "$run_dir/build.patch" ]; then pass; else fail "keep-runs: ROUTING_KIT_KEEP_RUNS=1 did not keep wt"; fi
+assert_contains "$out" "ROUTING_KIT_KEEP_RUNS=1" "keep-runs: one-line note about the kept copy"
+assert_contains "$out" "$run_dir/wt" "keep-runs: the note says where the copy is"
+
+# --- a secret-scan refusal (exit 5): copy deleted, exit code and ledger unchanged ---
+src=$(mk_src_repo)
+printf 'SECRET=plain-value\n' > "$src/.env"
+git -C "$src" add .env
+git -C "$src" commit -q -m "add env"
+brief=$(mk_brief)
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
+env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name cleanscan --brief "$brief" >/dev/null 2>&1
+code=$?
+assert_eq 5 "$code" "cleanup: a secret-scan refusal still exits 5"
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+if [ -z "$run_dir" ]; then fail "cleanup: no run dir found for the refusal"; else bulk_gone "$run_dir" "cleanup: secret-scan refusal"; fi
+assert_eq 5 "$(grep $'\tcodex\t' "$home/ledger.tsv" | tail -1 | cut -f7)" "cleanup: the refusal's ledger line still says exit 5"
+
+# --- a provider failure (codex exits 1): exit 4, copy deleted, one ledger line ---
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin_fails)
+env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name cleanfail --brief "$brief" >/dev/null 2>&1
+code=$?
+assert_eq 4 "$code" "cleanup: a provider failure still exits 4"
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+if [ -z "$run_dir" ]; then fail "cleanup: no run dir found for the provider failure"; else
+  bulk_gone "$run_dir" "cleanup: provider failure"
+  [ -f "$run_dir/codex-output.txt" ] && pass || fail "cleanup: codex-output.txt should survive a provider failure"
+fi
+assert_eq 1 "$(grep -c $'\tcodex\t' "$home/ledger.tsv")" "cleanup: provider failure writes exactly one ledger line"
+
+# --- a dirty-repo refusal exits before any copy exists: nothing to delete, still exit 2 ---
+src=$(mk_src_repo)
+echo more >> "$src/a.txt"
+brief=$(mk_brief)
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
+env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name cleandirty --brief "$brief" >/dev/null 2>&1
+assert_eq 2 "$?" "cleanup: a dirty repo still exits 2"
+
+# === review round 1 fixes =====================================================
+# a fake codex that adds a new binary file and changes a tracked binary one
+mk_fake_codex_bin_binary() {
+  bindir=$(mktmp)
+  cat > "$bindir/codex" <<'EOF'
+#!/bin/bash
+cat >/dev/null
+dir=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "-C" ]; then dir="$a"; fi
+  prev="$a"
+done
+printf '\000\000\377new-binary-file\376\000' > "$dir/added.bin"
+printf '\000\377\200changed-bytes\001\002\003\000' > "$dir/blob.bin"
+exit 0
+EOF
+  chmod +x "$bindir/codex"
+  echo "$bindir"
+}
+
+# --- binary changes survive in build.patch: git apply reproduces them byte for byte ---
+src=$(mk_src_repo)
+printf '\000\001\002binary-original\377\376\000\000' > "$src/blob.bin"
+git -C "$src" add blob.bin
+git -C "$src" commit -q -m "add binary"
+brief=$(mk_brief)
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin_binary)
+env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" ROUTING_KIT_KEEP_RUNS=1 \
+  "$BIN" --repo "$src" --name binrun --brief "$brief" >/dev/null 2>&1
+assert_eq 0 "$?" "binary build exits 0"
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+fresh=$(mktmp)
+git clone -q "$src" "$fresh/c" 2>/dev/null
+if [ -f "$run_dir/build.patch" ] && git -C "$fresh/c" apply "$run_dir/build.patch" 2>/dev/null \
+  && cmp -s "$fresh/c/blob.bin" "$run_dir/wt/blob.bin" && cmp -s "$fresh/c/added.bin" "$run_dir/wt/added.bin"; then
+  pass
+else
+  fail "build.patch must reproduce changed and new binary files byte for byte"
+fi
+
+# --- the run dir records its owner ---
+owner=$(cat "$run_dir/owner.pid" 2>/dev/null)
+case "$owner" in
+  ''|*[!0-9]*) fail "kit-codex-build did not write a numeric owner.pid ($owner)" ;;
+  *) pass ;;
+esac
+
+# --- codex fails after editing: the partial edits are saved as build.patch ---
+mk_fake_codex_bin_edits_then_fails() {
+  bindir=$(mktmp)
+  cat > "$bindir/codex" <<'EOF'
+#!/bin/bash
+cat >/dev/null
+dir=""; prev=""
+for a in "$@"; do
+  if [ "$prev" = "-C" ]; then dir="$a"; fi
+  prev="$a"
+done
+echo "half-done" > "$dir/partial.txt"
+echo "boom" >&2
+exit 1
+EOF
+  chmod +x "$bindir/codex"
+  echo "$bindir"
+}
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin_edits_then_fails)
+out=$(env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name salvage --brief "$brief" 2>&1)
+code=$?
+assert_eq 4 "$code" "a failing codex still exits 4"
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+bulk_gone "$run_dir" "salvage: failure"
+if [ -f "$run_dir/build.patch" ] && grep -q "partial.txt" "$run_dir/build.patch"; then pass; else fail "a codex failure after edits must still leave a build.patch"; fi
+assert_contains "$out" "$run_dir/build.patch" "the error names the salvaged patch"
+# no edits -> no empty patch file, and the old message
+src=$(mk_src_repo)
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin_fails)
+out=$(env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" "$BIN" --repo "$src" --name nosalvage --brief "$brief" 2>&1)
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+if [ -e "$run_dir/build.patch" ]; then fail "an empty salvage patch was left behind"; else pass; fi
+
+# --- SIGTERM to the script while codex is running: codex and its children
+# are killed, the copy is deleted, the ledger line is still written ---------
+mk_fake_codex_bin_hangs() {
+  pidfile="$1"
+  bindir=$(mktmp)
+  cat > "$bindir/codex" <<EOF
+#!/bin/bash
+cat >/dev/null
+sleep 300 &
+echo \$! > "$pidfile"
+echo \$\$ > "$pidfile.leader"
+wait
+EOF
+  chmod +x "$bindir/codex"
+  echo "$bindir"
+}
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+pid_dir=$(mktmp)
+fakebin=$(mk_fake_codex_bin_hangs "$pid_dir/child.pid")
+env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" "$BIN" --repo "$src" --name sigrun --brief "$brief" >/dev/null 2>&1 &
+sig_pid=$!
+i=0
+while [ ! -s "$pid_dir/child.pid" ] && [ "$i" -lt 200 ]; do i=$((i + 1)); sleep 0.1; done
+if [ -s "$pid_dir/child.pid" ]; then
+  child=$(cat "$pid_dir/child.pid")
+  leader=$(cat "$pid_dir/child.pid.leader")
+  # one { } group so bash's own "Terminated" job notice stays out of the output;
+  # poll (never a bare wait) so a script that hangs fails instead of hanging us
+  {
+    kill -TERM "$sig_pid"
+    i=0
+    while kill -0 "$sig_pid" 2>/dev/null && [ "$i" -lt 100 ]; do i=$((i + 1)); sleep 0.1; done
+    if kill -0 "$sig_pid" 2>/dev/null; then kill -KILL "$sig_pid"; sig_hung=1; else sig_hung=0; fi
+    wait "$sig_pid"
+  } 2>/dev/null
+  sleep 0.2
+  if kill -0 "$child" 2>/dev/null || kill -0 "$leader" 2>/dev/null; then
+    fail "SIGTERM to kit-codex-build left codex (or its child) running"
+    kill -KILL "$child" "$leader" 2>/dev/null
+  elif [ "$sig_hung" = 1 ]; then
+    fail "SIGTERM to kit-codex-build did not end it within 10s"
+  else
+    pass
+  fi
+  run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+  bulk_gone "$run_dir" "SIGTERM: the copy is deleted"
+  assert_eq 1 "$(grep -c $'\tcodex\t' "$home/ledger.tsv")" "SIGTERM: one ledger line is still written"
+else
+  kill -KILL "$sig_pid" 2>/dev/null
+  { wait "$sig_pid"; } 2>/dev/null
+  fail "the hanging fake codex never started"
+fi
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

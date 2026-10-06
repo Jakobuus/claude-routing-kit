@@ -68,6 +68,9 @@ Claude reviewer model subagent from your table.
 ## Building with helpers
 
 - Builds see only committed files: commit first. Build commands refuse a dirty repo.
+- A build works on a throwaway copy of the repo. The copy is deleted when the run ends. The
+  result is `<run dir>/build.patch` (the script prints its path); apply it with `git apply`.
+  `ROUTING_KIT_KEEP_RUNS=1` keeps the copy for debugging.
 - Every build brief asks for one run against the real data or real system before finishing;
   sample data alone lets broken builds through.
 - The build scripts never merge: review the diff, run the checks yourself, then merge. Run

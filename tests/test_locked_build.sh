@@ -239,6 +239,10 @@ FAKE_UPSTREAM="http://127.0.0.1:1"
 
 run_locked_build() {
   # run_locked_build KIT_HOME CLAUDE_LINK KEYCHAIN_SCRIPT REPO NAME BRIEF [EXTRA_ENV...]
+  # Runs with ROUTING_KIT_KEEP_RUNS=1 unless EXTRA_ENV says otherwise: the
+  # older tests below look inside the run dir's wt after the run (the marker
+  # a fake claude wrote, its env dump), which locked-build deletes by default.
+  # The cleanup tests at the end of this file pass ROUTING_KIT_KEEP_RUNS=0.
   kit_home="$1"; claude_link="$2"; keychain="$3"; repo="$4"; name="$5"; brief="$6"
   shift 6
   env ROUTING_KIT_HOME="$kit_home" \
@@ -247,6 +251,7 @@ run_locked_build() {
       PROVIDER_FOR_FAKE_KEYCHAIN="kimi" \
       KIT_GATE_UPSTREAM="$FAKE_UPSTREAM" \
       GATE_TEST_UPSTREAM_INSECURE=1 \
+      ROUTING_KIT_KEEP_RUNS=1 \
       "$@" \
       bash "$LOCKED_BUILD" --provider kimi --repo "$repo" --name "$name" --brief "$brief"
 }
@@ -282,12 +287,24 @@ assert_contains "$out" "native" "non-native message names the native install req
 kit_home=$(mktmp)
 write_profile "$kit_home" true
 repo=$(mk_src_repo)
-out=$(run_locked_build "$kit_home" "$claude_link" "$keychain_miss" "$repo" run3 "$BRIEF" 2>&1)
+out=$(run_locked_build "$kit_home" "$claude_link" "$keychain_miss" "$repo" run3 "$BRIEF" ROUTING_KIT_KEEP_RUNS=0 2>&1)
 code=$?
 assert_eq 3 "$code" "missing key exits 3"
 assert_contains "$out" "security add-generic-password" "missing-key message tells the user how to add it"
 run_dir=$(find "$kit_home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
-[ -z "$run_dir" ] && pass || fail "missing key leaves an exported run dir behind"
+# The run dir may keep its small files; the repo copy must be gone.
+if [ -z "$run_dir" ] || [ ! -e "$run_dir/wt" ]; then pass; else fail "missing key leaves the repo copy behind"; fi
+
+# --- 3b. no key, ROUTING_KIT_KEEP_RUNS=1 -> 3, and the copy is kept (the key
+# failure used to rm -rf the run dir whatever KEEP_RUNS said) ----------------
+kit_home=$(mktmp)
+write_profile "$kit_home" true
+repo=$(mk_src_repo)
+out=$(run_locked_build "$kit_home" "$claude_link" "$keychain_miss" "$repo" run3b "$BRIEF" ROUTING_KIT_KEEP_RUNS=1 2>&1)
+code=$?
+assert_eq 3 "$code" "missing key with KEEP_RUNS=1 still exits 3"
+run_dir=$(find "$kit_home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+if [ -d "$run_dir/wt/.git" ]; then pass; else fail "ROUTING_KIT_KEEP_RUNS=1 did not keep the copy on a key failure"; fi
 
 # --- 4. dirty repo -> 2 -------------------------------------------------------
 kit_home=$(mktmp)
@@ -891,6 +908,228 @@ else
   else
     fail "item 5: fd-probe.txt was never written by the fake claude"
   fi
+fi
+
+# === the repo copy is deleted when the run ends (ROUTING_KIT_KEEP_RUNS unset/0) ===
+# bulk_gone RUN_DIR LABEL -- wt, home, cfg and tmp are all gone.
+bulk_gone() {
+  bg_left=""
+  for bg_d in wt home cfg tmp; do
+    [ -e "$1/$bg_d" ] && bg_left="$bg_left $bg_d"
+  done
+  if [ -z "$bg_left" ]; then pass; else fail "$2: still in the run dir:$bg_left"; fi
+}
+
+# --- cleanup 1: success -> bulk gone, build.patch == the printed diff, logs kept
+kit_home=$(mktmp)
+write_profile "$kit_home" true
+repo=$(mk_src_repo)
+out=$(run_locked_build "$kit_home" "$claude_link" "$keychain_hit" "$repo" run-clean-ok "$BRIEF" ROUTING_KIT_KEEP_RUNS=0 2>/dev/null)
+code=$?
+assert_locked_build_ok "$code" "$out" "cleanup: a normal run exits 0"
+run_dir=$(find "$kit_home/runs" -maxdepth 1 -name '*run-clean-ok*' 2>/dev/null | head -1)
+if [ -z "$run_dir" ]; then
+  fail "cleanup: could not find the run-clean-ok run dir"
+else
+  bulk_gone "$run_dir" "cleanup: success"
+  if [ -f "$run_dir/build.patch" ]; then
+    printed=$(printf '%s\n' "$out" | sed -n '/^--- diff ---$/,/^run dir: /p' | sed '1d;$d')
+    assert_eq "$(cat "$run_dir/build.patch")" "$printed" "cleanup: build.patch equals the printed diff"
+    assert_contains "$printed" "hello-from-fake-claude.txt" "cleanup: the printed diff has the build's new file"
+    # the result must be usable on its own: git apply it to a fresh checkout
+    if git -C "$repo" apply --check "$run_dir/build.patch" 2>/dev/null; then pass; else fail "cleanup: build.patch does not apply to the source repo"; fi
+  else
+    fail "cleanup: build.patch was not written"
+  fi
+  assert_contains "$out" "build patch: $run_dir/build.patch" "cleanup: the patch path is printed"
+  assert_contains "$out" "run dir: $run_dir" "cleanup: the run dir is still printed"
+  for keep in brief.md claude-output.json canaries.log canaries-final.log; do
+    if [ -s "$run_dir/$keep" ]; then pass; else fail "cleanup: $keep should survive in the run dir"; fi
+  done
+fi
+if pgrep -f "gate.py.*$run_dir" >/dev/null 2>&1; then
+  fail "cleanup: the gate is still running after a normal run"
+else
+  pass
+fi
+
+# --- cleanup 2: ROUTING_KIT_KEEP_RUNS=1 keeps the copy ---------------------
+kit_home=$(mktmp)
+write_profile "$kit_home" true
+repo=$(mk_src_repo)
+out=$(run_locked_build "$kit_home" "$claude_link" "$keychain_hit" "$repo" run-clean-keep "$BRIEF" ROUTING_KIT_KEEP_RUNS=1 2>&1)
+code=$?
+assert_locked_build_ok "$code" "$out" "cleanup: a keep-runs run exits 0"
+run_dir=$(find "$kit_home/runs" -maxdepth 1 -name '*run-clean-keep*' 2>/dev/null | head -1)
+if [ -d "$run_dir/wt/.git" ] && [ -f "$run_dir/build.patch" ]; then pass; else fail "cleanup: ROUTING_KIT_KEEP_RUNS=1 did not keep wt"; fi
+assert_contains "$out" "ROUTING_KIT_KEEP_RUNS=1" "cleanup: keep-runs says where the copy is kept"
+assert_contains "$out" "$run_dir/wt" "cleanup: the keep-runs note names the copy"
+
+# --- cleanup 3: a secret-scan refusal (exit 5) -> bulk gone, exit code unchanged
+kit_home=$(mktmp)
+write_profile "$kit_home" true
+repo=$(mk_src_repo)
+printf 'SECRET=plain-value\n' > "$repo/.env"
+git -C "$repo" add .env
+git -C "$repo" commit -q -m "add env"
+out=$(run_locked_build "$kit_home" "$claude_link" "$keychain_hit" "$repo" run-clean-scan "$BRIEF" ROUTING_KIT_KEEP_RUNS=0 2>&1)
+code=$?
+assert_eq 5 "$code" "cleanup: a secret-scan refusal still exits 5"
+run_dir=$(find "$kit_home/runs" -maxdepth 1 -name '*run-clean-scan*' 2>/dev/null | head -1)
+if [ -z "$run_dir" ]; then fail "cleanup: could not find the run-clean-scan run dir"; else
+  bulk_gone "$run_dir" "cleanup: secret-scan refusal"
+  [ -f "$run_dir/brief.md" ] && pass || fail "cleanup: brief.md should survive a refusal"
+fi
+
+# --- cleanup 4: a canary failure on the scratch round (exit 5) and on the
+# final round, with the gate already up (exit 5) -> bulk gone, gate dead ----
+for call in 1 2; do
+  kit_home=$(mktmp)
+  write_profile "$kit_home" true
+  repo=$(mk_src_repo)
+  out=$(KIT_CANARY_FORCE_SUCCEED="read real-home marker" KIT_CANARY_FORCE_SUCCEED_CALL=$call \
+        run_locked_build "$kit_home" "$claude_link" "$keychain_hit" "$repo" "run-clean-canary$call" "$BRIEF" ROUTING_KIT_KEEP_RUNS=0 2>&1)
+  code=$?
+  assert_eq 5 "$code" "cleanup: a canary failure (round $call) still exits 5"
+  run_dir=$(find "$kit_home/runs" -maxdepth 1 -name "*run-clean-canary$call*" 2>/dev/null | head -1)
+  if [ -z "$run_dir" ]; then fail "cleanup: could not find the canary round $call run dir"; else
+    bulk_gone "$run_dir" "cleanup: canary failure (round $call)"
+    if pgrep -f "gate.py.*$run_dir" >/dev/null 2>&1; then fail "cleanup: gate still running after canary failure (round $call)"; else pass; fi
+  fi
+done
+
+# --- cleanup 5: a provider failure (claude exits non-zero) -> exit 4, bulk
+# gone, the patch is still written ------------------------------------------
+kit_home=$(mktmp)
+write_profile "$kit_home" true
+repo=$(mk_src_repo)
+nonzero_claude=$(mk_native_claude_nonzero)
+out=$(run_locked_build "$kit_home" "$nonzero_claude" "$keychain_hit" "$repo" run-clean-prov "$BRIEF" ROUTING_KIT_KEEP_RUNS=0 2>&1)
+code=$?
+assert_eq 4 "$code" "cleanup: a provider failure still exits 4"
+run_dir=$(find "$kit_home/runs" -maxdepth 1 -name '*run-clean-prov*' 2>/dev/null | head -1)
+if [ -z "$run_dir" ]; then fail "cleanup: could not find the run-clean-prov run dir"; else
+  bulk_gone "$run_dir" "cleanup: provider failure"
+  [ -f "$run_dir/build.patch" ] && pass || fail "cleanup: build.patch missing after a provider failure"
+fi
+
+# --- cleanup 6: a timeout kill (exit 4) -> bulk gone ------------------------
+kit_home=$(mktmp)
+write_profile "$kit_home" true
+repo=$(mk_src_repo)
+out=$(run_with_timeout 30 env ROUTING_KIT_HOME="$kit_home" KIT_CLAUDE_BIN="$hang_claude" \
+      KIT_KEYCHAIN_CMD="$keychain_hit" PROVIDER_FOR_FAKE_KEYCHAIN="kimi" \
+      KIT_GATE_UPSTREAM="$FAKE_UPSTREAM" GATE_TEST_UPSTREAM_INSECURE=1 \
+      bash "$LOCKED_BUILD" --provider kimi --repo "$repo" --name run-clean-timeout --brief "$BRIEF" --timeout 2 2>&1)
+code=$?
+assert_eq 4 "$code" "cleanup: a timeout still exits 4"
+run_dir=$(find "$kit_home/runs" -maxdepth 1 -name '*run-clean-timeout*' 2>/dev/null | head -1)
+if [ -z "$run_dir" ]; then fail "cleanup: could not find the run-clean-timeout run dir"; else
+  bulk_gone "$run_dir" "cleanup: timeout"
+fi
+
+# --- cleanup 7: the script itself is killed (SIGTERM) while the jailed
+# claude is mid-build -> the EXIT trap still stops the jail and deletes wt --
+kit_home=$(mktmp)
+write_profile "$kit_home" true
+repo=$(mk_src_repo)
+sig_out=$(mktmp)/out.txt
+env ROUTING_KIT_HOME="$kit_home" KIT_CLAUDE_BIN="$hang_claude" KIT_KEYCHAIN_CMD="$keychain_hit" \
+    PROVIDER_FOR_FAKE_KEYCHAIN="kimi" KIT_GATE_UPSTREAM="$FAKE_UPSTREAM" GATE_TEST_UPSTREAM_INSECURE=1 \
+    bash "$LOCKED_BUILD" --provider kimi --repo "$repo" --name run-clean-sig --brief "$BRIEF" --timeout 120 \
+    >"$sig_out" 2>&1 &
+sig_pid=$!
+i=0
+sig_run=""
+while [ "$i" -lt 300 ]; do
+  sig_run=$(find "$kit_home/runs" -maxdepth 1 -name '*run-clean-sig*' 2>/dev/null | head -1)
+  [ -n "$sig_run" ] && [ -f "$sig_run/wt/.fake-claude-called-marker" ] && break
+  i=$((i + 1)); sleep 0.1
+done
+if [ -n "$sig_run" ] && [ -f "$sig_run/wt/.fake-claude-called-marker" ]; then
+  kill -TERM "$sig_pid" 2>/dev/null
+  { wait "$sig_pid"; } 2>/dev/null
+  bulk_gone "$sig_run" "cleanup: SIGTERM"
+  if pgrep -f "gate.py.*$sig_run" >/dev/null 2>&1; then fail "cleanup: gate still running after SIGTERM"; else pass; fi
+else
+  kill -KILL "$sig_pid" 2>/dev/null
+  { wait "$sig_pid"; } 2>/dev/null
+  fail "cleanup: the SIGTERM test's fake claude never started"
+fi
+
+# --- fix: the run dir records its owner (owner.pid) ---------------------------
+kit_home=$(mktmp)
+write_profile "$kit_home" true
+repo=$(mk_src_repo)
+run_locked_build "$kit_home" "$claude_link" "$keychain_hit" "$repo" run-owner "$BRIEF" ROUTING_KIT_KEEP_RUNS=0 >/dev/null 2>&1
+run_dir=$(find "$kit_home/runs" -maxdepth 1 -name '*run-owner*' 2>/dev/null | head -1)
+owner=$(cat "$run_dir/owner.pid" 2>/dev/null)
+case "$owner" in
+  ''|*[!0-9]*) fail "locked-build did not write a numeric owner.pid ($owner)" ;;
+  *) pass ;;
+esac
+
+# --- fix: a jailed claude that IGNORES TERM must not block cleanup ----------
+# Old order was TERM, wait, KILL: the wait never returned, so the script never
+# exited and wt was never deleted.
+mk_native_claude_ignores_term() {
+  root=$(mktmp)
+  versdir="$root/.local/share/claude/versions/9.9.9"
+  mkdir -p "$versdir" "$root/.local/bin"
+  bin="$versdir/claude"
+  cat > "$bin" <<'EOF'
+#!/bin/bash
+trap '' TERM
+: > .fake-claude-called-marker
+while :; do sleep 1; done
+EOF
+  chmod +x "$bin"
+  link="$root/.local/bin/claude"
+  ln -s "$bin" "$link"
+  echo "$link"
+}
+kit_home=$(mktmp)
+write_profile "$kit_home" true
+repo=$(mk_src_repo)
+deaf_claude=$(mk_native_claude_ignores_term)
+sig_out=$(mktmp)/out.txt
+env ROUTING_KIT_HOME="$kit_home" KIT_CLAUDE_BIN="$deaf_claude" KIT_KEYCHAIN_CMD="$keychain_hit" \
+    PROVIDER_FOR_FAKE_KEYCHAIN="kimi" KIT_GATE_UPSTREAM="$FAKE_UPSTREAM" GATE_TEST_UPSTREAM_INSECURE=1 \
+    bash "$LOCKED_BUILD" --provider kimi --repo "$repo" --name run-clean-deaf --brief "$BRIEF" --timeout 120 \
+    >"$sig_out" 2>&1 &
+sig_pid=$!
+i=0
+sig_run=""
+while [ "$i" -lt 300 ]; do
+  sig_run=$(find "$kit_home/runs" -maxdepth 1 -name '*run-clean-deaf*' 2>/dev/null | head -1)
+  [ -n "$sig_run" ] && [ -f "$sig_run/wt/.fake-claude-called-marker" ] && break
+  i=$((i + 1)); sleep 0.1
+done
+if [ -n "$sig_run" ] && [ -f "$sig_run/wt/.fake-claude-called-marker" ]; then
+  # one { } group so bash's own "Terminated" job notice stays out of the output
+  {
+    kill -TERM "$sig_pid"
+    i=0
+    while kill -0 "$sig_pid" 2>/dev/null && [ "$i" -lt 100 ]; do i=$((i + 1)); sleep 0.1; done
+    if kill -0 "$sig_pid" 2>/dev/null; then
+      deaf_blocked=1
+      kill -KILL "$sig_pid"
+      pkill -KILL -P "$sig_pid"
+    else
+      deaf_blocked=0
+    fi
+    wait "$sig_pid"
+  } 2>/dev/null
+  if [ "$deaf_blocked" = 1 ]; then
+    fail "cleanup: a claude that ignores TERM blocked locked-build's exit for 10s"
+  else
+    pass
+  fi
+  bulk_gone "$sig_run" "cleanup: SIGTERM with a TERM-ignoring claude"
+else
+  kill -KILL "$sig_pid" 2>/dev/null
+  { wait "$sig_pid"; } 2>/dev/null
+  fail "cleanup: the TERM-ignoring fake claude never started"
 fi
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"

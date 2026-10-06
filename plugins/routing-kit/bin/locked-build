@@ -7,6 +7,10 @@
 # Usage: locked-build --provider kimi|glm --repo R --name N --brief FILE
 #                      [--model M] [--timeout SECS]
 #
+# The repo copy (wt) and the jail's home/cfg/tmp are deleted when the run
+# ends, on every exit path. The result is <run dir>/build.patch (apply it with
+# `git apply`); ROUTING_KIT_KEEP_RUNS=1 keeps the copy for debugging.
+#
 # Exit codes: 0 ok · 2 bad input/dirty repo/unsafe path · 3 missing
 # key/non-native Claude · 4 provider or gate error · 5 lockdown or
 # secret-scan refusal (the provider is never contacted when this happens).
@@ -113,6 +117,62 @@ run_dir=$(run_export "$repo" "$name")
 export_code=$?
 [ "$export_code" -eq 0 ] || exit "$export_code"
 wt="$run_dir/wt"
+run_claim "$run_dir"
+
+# From here on every exit -- a refusal, a failure, success -- goes through
+# cleanup: stop whatever is still running, then delete the repo copy. The
+# pids start empty because the trap can fire before any of them exists.
+scratch_pid=""
+gate_pid=""
+claude_pid=""
+timer_pid=""
+cleanup() {
+  # This only ever does real work for the processes still live when the
+  # script exits early (a kit_die, or a signal such as an outer caller's own
+  # timeout or Ctrl-C) while they are still running: the normal path already
+  # clears claude_pid and timer_pid to "" before it returns.
+  #
+  # Each kill+wait pair below is wrapped in its own `{ ...; } 2>/dev/null`
+  # group, not a per-command redirect on just the final `wait`. Confirmed by
+  # direct reproduction (not just reasoning): bash's asynchronous
+  # "Terminated: ..." job-control notice is printed by the shell's own
+  # job-check logic, which can fire between any two commands in this block
+  # (e.g. right after the `kill`, before `wait` even runs) -- it is NOT part
+  # of either command's own output, so `kill ... 2>/dev/null` alone does
+  # nothing for it, and only a redirect spanning the whole window during
+  # which the job can die catches it. A `{ group; }` (no subshell) keeps fd 2
+  # redirected to /dev/null for every command inside, including bash's own
+  # notification checks between them, for as long as the group is executing.
+  # Order matters in both blocks: TERM, a short grace period, KILL, and only
+  # then `wait`. A leader that ignores TERM would otherwise block `wait`
+  # forever, and the repo copy below would never be deleted.
+  if [ -n "$claude_pid" ]; then
+    {
+      kill -TERM -"$claude_pid" 2>/dev/null || kill "$claude_pid" 2>/dev/null
+      sleep 0.3
+      kill -KILL -"$claude_pid" 2>/dev/null || kill -KILL "$claude_pid" 2>/dev/null
+      wait "$claude_pid"
+    } 2>/dev/null
+  fi
+  if [ -n "$timer_pid" ]; then
+    {
+      kill -TERM -"$timer_pid" 2>/dev/null || kill "$timer_pid" 2>/dev/null
+      kill -KILL -"$timer_pid" 2>/dev/null || kill -KILL "$timer_pid" 2>/dev/null
+      wait "$timer_pid"
+    } 2>/dev/null
+  fi
+  if [ -n "$gate_pid" ]; then
+    { kill "$gate_pid" 2>/dev/null; wait "$gate_pid"; } 2>/dev/null
+  fi
+  if [ -n "$scratch_pid" ]; then
+    { kill "$scratch_pid" 2>/dev/null; wait "$scratch_pid"; } 2>/dev/null
+  fi
+  # Last, once nothing of the jail or the gate can still be writing. Never
+  # changes the exit code: the shell exits with the status it had.
+  run_cleanup "$run_dir" || true
+}
+trap cleanup EXIT
+
 cp "$brief" "$run_dir/brief.md" || kit_die 2 "could not copy brief into the run dir"
 
 # --- Step 4: secret scan — before the gate exists, before anything is contacted
@@ -124,7 +184,8 @@ fi
 key="$(kit_key "$provider")"
 key_code=$?
 if [ "$key_code" -ne 0 ]; then
-  rm -rf "$run_dir"
+  # No rm here: the EXIT trap's run_cleanup deletes the repo copy (and
+  # honours ROUTING_KIT_KEEP_RUNS), the same as every other exit.
   exit "$key_code"
 fi
 
@@ -214,6 +275,7 @@ canary_code=$?
 # never before, which is exactly the gap this replaces.
 kill "$scratch_pid" 2>/dev/null
 wait "$scratch_pid" 2>/dev/null
+scratch_pid=""
 cat "$canary_log"
 # Validated unconditionally, not only when canary_code != 0: a status of 0
 # with a log that doesn't actually back that up (missing/malformed/
@@ -234,41 +296,6 @@ printf '%s\n' "$key" | /usr/bin/python3 "$GATE_PY" \
   >"$run_dir/gate-stdout.log" 2>"$gate_stderr" &
 gate_pid=$!
 key=""
-
-claude_pid=""
-timer_pid=""
-cleanup() {
-  # This only ever does real work if the script itself is cut short by a
-  # signal (e.g. an outer caller's own timeout, or Ctrl-C) while claude_pid/
-  # timer_pid are still live and inside the `set -m` window below -- the
-  # normal exit path already clears both to "" before it returns.
-  #
-  # Each kill+wait pair below is wrapped in its own `{ ...; } 2>/dev/null`
-  # group, not a per-command redirect on just the final `wait`. Confirmed by
-  # direct reproduction (not just reasoning): bash's asynchronous
-  # "Terminated: ..." job-control notice is printed by the shell's own
-  # job-check logic, which can fire between any two commands in this block
-  # (e.g. right after the `kill`, before `wait` even runs) -- it is NOT part
-  # of either command's own output, so `kill ... 2>/dev/null` alone does
-  # nothing for it, and only a redirect spanning the whole window during
-  # which the job can die catches it. A `{ group; }` (no subshell) keeps fd 2
-  # redirected to /dev/null for every command inside, including bash's own
-  # notification checks between them, for as long as the group is executing.
-  if [ -n "$claude_pid" ]; then
-    {
-      kill -TERM -"$claude_pid" 2>/dev/null || kill "$claude_pid" 2>/dev/null
-      wait "$claude_pid"
-    } 2>/dev/null
-  fi
-  if [ -n "$timer_pid" ]; then
-    {
-      kill "$timer_pid" 2>/dev/null
-      wait "$timer_pid"
-    } 2>/dev/null
-  fi
-  { kill "$gate_pid" 2>/dev/null; wait "$gate_pid"; } 2>/dev/null
-}
-trap cleanup EXIT
 
 i=0
 while [ ! -s "$gate_port_file" ]; do
@@ -431,6 +458,7 @@ fi
 # this throwaway clone first (safe: wt is never pushed anywhere back).
 run_stage_and_diff "$wt" || exit 4
 echo "run dir: $run_dir"
+echo "build patch: $run_dir/build.patch"
 
 # --- Step 11: the ledger line -------------------------------------------------
 # input_tokens alone under-counts badly once prompt caching is involved:
@@ -458,5 +486,5 @@ fi
 cost_usd=$(ledger_model_cost "$RULES_JSON" "$model" "$in_tokens" "$out_tokens")
 ledger_append "locked-build" "$model" "$name" "$in_tokens" "$out_tokens" "$claude_code" "$provider" "$cost_usd"
 
-# --- Step 12: stop the gate (also runs via the EXIT trap) --------------------
+# --- Step 12: stop the gate, delete the repo copy (the EXIT trap, cleanup) ---
 exit "$claude_code"

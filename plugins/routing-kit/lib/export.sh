@@ -11,7 +11,7 @@ EXPORT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # _run_export_copy REPO WT — the clone-and-scrub half of run_export. Runs in a
 # subshell (see run_export), so a kit_die in here only ends that subshell.
 _run_export_copy() {
-  local repo="$1" wt="$2" r
+  local repo="$1" wt="$2" r run_dir
   # --no-local: no object-hardlink sharing with the source .git. --template=
   # (empty): no host clone template (hooks, excludes) copied in.
   # kit_git: no host gitconfig, no hooks, no fsmonitor -- so a clone whose
@@ -47,6 +47,19 @@ _run_export_copy() {
     mv "$wt/.git/packed-refs.tmp" "$wt/.git/packed-refs" \
       || kit_die 2 "could not rewrite packed-refs in the copy"
   fi
+
+  # A pristine copy of the scrubbed .git, kept outside wt where no build can
+  # write (Seatbelt grants wt/home/cfg/tmp only; Codex's workspace-write is its
+  # cwd, wt). Every git step after the build runs against THIS copy with
+  # --git-dir/--work-tree (see run_build_patch) and never reads wt/.git, which
+  # the build could have rewritten: config, index, objects, hooks, anything.
+  # A real copy (cp -R), no hardlinks shared with wt/.git. Also record wt's
+  # size, for the growth cap in run_preflight_wt.
+  run_dir="$(dirname "$wt")"
+  /bin/cp -R "$wt/.git" "$run_dir/git.pristine" \
+    || kit_die 2 "could not save a pristine copy of the git directory"
+  du -sk "$wt" 2>/dev/null | cut -f1 > "$run_dir/wt-size.kb"
+  [ -s "$run_dir/wt-size.kb" ] || kit_die 2 "could not measure the copy"
 }
 
 # run_export REPO NAME — makes a self-contained working copy of REPO's
@@ -113,32 +126,160 @@ run_export() {
   echo "$run_dir"
 }
 
-# Stage a provider's scratch tree and print its complete diff. A failed
-# local git step is a provider-run failure even when the model exited 0.
-# The same diff is also written to <run dir>/build.patch (the run dir is the
-# worktree's parent): that file is the result, since the worktree itself is
-# deleted when the run ends. --binary, so a changed or new binary file
-# survives in the patch (git apply restores it byte for byte).
-run_stage_and_diff() {
-  local worktree="$1" patch
-  patch="$(dirname "$worktree")/build.patch"
-  if ! kit_git -C "$worktree" add -A >/dev/null 2>&1; then
+# _run_has_attr_source GIT-OPTIONS... — returns 0 if this git knows the global
+# --attr-source option (git 2.40+). run_build_patch uses it so gitattributes
+# come from HEAD only, never from the build's worktree. On an older git the
+# build still runs, without it, and run_preflight_wt adds one restriction
+# instead (no symlink to a directory; see there).
+_run_has_attr_source() {
+  kit_git --attr-source=HEAD "$@" rev-parse HEAD >/dev/null 2>&1
+}
+
+# _run_find_hit WT WHAT FIND-TESTS... — one preflight scan of the worktree:
+# prints the first match for FIND-TESTS (skipping wt/.git, which is never read)
+# and returns 4 with a "refusing" message, or returns 0 if nothing matches.
+# Fails closed: if find itself errors (unreadable dir), that is a refusal too.
+_run_find_hit() {
+  local wt="$1" what="$2" hit rc
+  shift 2
+  hit="$(find "$wt" -path "$wt/.git" -prune -o "$@" -print 2>/dev/null | head -n 1; exit "${PIPESTATUS[0]}")"
+  rc=$?
+  if [ -n "$hit" ]; then
+    echo "refusing to stage the build in $wt: $what ($hit)" >&2
+    return 4
+  fi
+  if [ "$rc" -ne 0 ]; then
+    echo "refusing to stage the build in $wt: could not scan it" >&2
+    return 4
+  fi
+  return 0
+}
+
+# run_preflight_wt WT [OLD_GIT] — checks the build's worktree before any git command
+# touches it; returns 4 (message on stderr) if it holds anything git could be
+# tricked or stalled by:
+#  - a nested .git in any letter case (APFS treats .GIT as .git): a nested
+#    repo has its own config, which git add/status can act on;
+#  - a FIFO, socket or device: a FIFO .gitattributes or .gitignore hangs git;
+#  - a regular file with several hard links: it may be a host file;
+#  - on a git without --attr-source (older than 2.40) only: a symlink to a
+#    directory. git follows a symlinked parent dir when it looks up the
+#    attributes of a deleted tracked file, so a build could make it read a
+#    .gitattributes outside the copy. (With --attr-source=HEAD attributes never
+#    come from the worktree, so symlinked dirs are fine there.)
+#  - growth past ROUTING_KIT_MAX_GROWTH_MB (default 2048) over wt's size at
+#    export: a build that fills the disk is refused, not diffed.
+# Symlinks in the tree are fine: git stores them as links, never follows them.
+run_preflight_wt() {
+  local wt="${1:-}" old_git="${2:-}" base now max hit rc
+  if [ -z "$wt" ] || [ ! -d "$wt" ]; then
+    echo "refusing to stage the build: no worktree at ${wt:-(none)}" >&2
+    return 4
+  fi
+  _run_find_hit "$wt" "a nested git repository or submodule" -iname .git || return 4
+  _run_find_hit "$wt" "a FIFO, socket or device file" ! -type f ! -type d ! -type l || return 4
+  _run_find_hit "$wt" "a file with more than one hard link" -type f -links +1 || return 4
+  if [ -z "$old_git" ]; then
+    # called on its own: decide from the pristine copy next to wt
+    if _run_has_attr_source --git-dir="$(dirname "$wt")/git.pristine"; then old_git=0; else old_git=1; fi
+  fi
+  if [ "$old_git" = 1 ]; then
+    # -print0 + read -d '': any file name, newlines included; the loop stops at
+    # the first symlink whose target is a directory ([ -d ] follows the link).
+    hit="$(find "$wt" -path "$wt/.git" -prune -o -type l -print0 2>/dev/null \
+      | while IFS= read -r -d '' link; do
+          if [ -d "$link" ]; then printf '%s' "$link"; break; fi
+        done; exit "${PIPESTATUS[0]}")"
+    rc=$?
+    if [ -n "$hit" ]; then
+      echo "refusing to stage the build in $wt: a symlink to a directory ($hit); this git is older than 2.40, so update git to allow them" >&2
+      return 4
+    fi
+    if [ "$rc" -ne 0 ] && [ "$rc" -ne 141 ]; then
+      echo "refusing to stage the build in $wt: could not scan it for symlinks" >&2
+      return 4
+    fi
+  fi
+  max="${ROUTING_KIT_MAX_GROWTH_MB:-2048}"
+  case "$max" in ''|*[!0-9]*) max=2048 ;; esac
+  base="$(cat "$(dirname "$wt")/wt-size.kb" 2>/dev/null)"
+  now="$(du -sk "$wt" 2>/dev/null | cut -f1)"
+  case "$base" in ''|*[!0-9]*) echo "refusing to stage the build in $wt: could not measure its size" >&2; return 4 ;; esac
+  case "$now" in ''|*[!0-9]*) echo "refusing to stage the build in $wt: could not measure its size" >&2; return 4 ;; esac
+  if [ $((now - base)) -gt $((max * 1024)) ]; then
+    echo "refusing to stage the build in $wt: it grew by more than $max MB" >&2
+    return 4
+  fi
+  return 0
+}
+
+# run_build_patch WT — stages everything the build changed and writes the
+# complete diff to <run dir>/build.patch (the run dir is WT's parent; the
+# worktree itself is deleted when the run ends, so that file is the result).
+# Prints nothing on success; returns 4 with a message on any failure, and a
+# failed run leaves no build.patch behind. A failed local git step is a
+# provider-run failure even when the model exited 0.
+#
+# git runs against the pristine copy of .git that run_export saved outside WT,
+# never against WT/.git: the build could have rewritten that (a filter or
+# fsmonitor in its config, a crafted index, ...). It must be the FLAGS
+# --git-dir/--work-tree: kit_git runs git under `env -i`, which drops
+# GIT_DIR/GIT_WORK_TREE, and git would quietly fall back to WT/.git. Staging
+# happens in the pristine index, then `diff --cached` reads only that index
+# against HEAD, so the worktree is not read a second time. --binary keeps
+# changed or new binary files (git apply restores them byte for byte).
+# --attr-source=HEAD on both git calls when git has it (2.40+): gitattributes
+# come from the pristine HEAD tree only, never from the worktree, so neither the
+# build's own .gitattributes nor a symlinked dir (git follows a parent symlink
+# when it looks up the attributes of a deleted file) can change how the patch
+# is made. On an older git the preflight refuses dir symlinks instead, and a
+# build's own .gitattributes may affect the patch's formatting (accepted).
+run_build_patch() {
+  local worktree="$1" run_dir patch pristine attr old_git
+  run_dir="$(dirname "$worktree")"
+  patch="$run_dir/build.patch"
+  pristine="$run_dir/git.pristine"
+  if [ ! -d "$pristine" ]; then
+    echo "refusing to stage the build in $worktree: no pristine git directory was saved" >&2
+    return 4
+  fi
+  # git 2.40+: attributes from HEAD only. Older git: no such option, so the
+  # preflight refuses symlinks to directories instead.
+  attr=()
+  old_git=1
+  if _run_has_attr_source --git-dir="$pristine"; then
+    attr=(--attr-source=HEAD)
+    old_git=0
+  fi
+  run_preflight_wt "$worktree" "$old_git" || return 4
+  if ! kit_git ${attr[@]+"${attr[@]}"} --git-dir="$pristine" --work-tree="$worktree" -C "$worktree" \
+      -c submodule.recurse=false add -A >/dev/null 2>&1; then
     echo "could not stage the build patch" >&2
     return 4
   fi
-  echo "--- diff ---"
-  if ! kit_git -C "$worktree" diff --binary --no-ext-diff --no-textconv HEAD >"$patch" 2>/dev/null; then
+  if ! kit_git ${attr[@]+"${attr[@]}"} --git-dir="$pristine" --work-tree="$worktree" -C "$worktree" \
+      diff --cached --binary --no-ext-diff --no-textconv --ignore-submodules=all HEAD >"$patch" 2>/dev/null; then
     rm -f "$patch"
     echo "could not read the build diff" >&2
     return 4
   fi
-  cat "$patch"
+  return 0
 }
 
-# run_cleanup RUN_DIR — deletes the bulky per-run dirs (wt, home, cfg, tmp)
-# and keeps the small files: logs, brief.md, build.patch, the provider's
-# output. Never fails (callers run it from exit traps, which must keep the
-# script's own exit code) and never deletes anything but those four dirs
+# Stage a provider's scratch tree and print its complete diff (run_build_patch,
+# which also writes it to <run dir>/build.patch).
+run_stage_and_diff() {
+  local worktree="$1"
+  run_build_patch "$worktree" || return 4
+  echo "--- diff ---"
+  cat "$(dirname "$worktree")/build.patch"
+}
+
+# run_cleanup RUN_DIR — deletes the bulky per-run dirs (wt, home, cfg, tmp and
+# the pristine git.pristine) and keeps the small files: logs, brief.md,
+# build.patch, the provider's output. Never fails (callers run it from exit
+# traps, which must keep the script's own exit code) and never deletes
+# anything but those five dirs
 # inside a direct child of $KIT_HOME/runs. ROUTING_KIT_KEEP_RUNS=1 keeps the
 # copy for debugging.
 run_cleanup() {
@@ -161,7 +302,7 @@ run_cleanup() {
     echo "run_cleanup: ROUTING_KIT_KEEP_RUNS=1, repo copy kept at $real/wt" >&2
     return 0
   fi
-  for d in wt home cfg tmp; do
+  for d in wt home cfg tmp git.pristine; do
     p="$real/$d"
     if [ -L "$p" ]; then
       rm -f "$p"

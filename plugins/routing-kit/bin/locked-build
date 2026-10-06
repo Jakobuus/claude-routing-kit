@@ -10,6 +10,7 @@
 # The repo copy (wt) and the jail's home/cfg/tmp are deleted when the run
 # ends, on every exit path. The result is <run dir>/build.patch (apply it with
 # `git apply`); ROUTING_KIT_KEEP_RUNS=1 keeps the copy for debugging.
+# A copy holding a nested git repo, a FIFO or a hard-linked file is refused (exit 4).
 #
 # Exit codes: 0 ok · 2 bad input/dirty repo/unsafe path · 3 missing
 # key/non-native Claude · 4 provider or gate error · 5 lockdown or

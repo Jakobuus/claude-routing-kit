@@ -71,6 +71,8 @@ Claude reviewer model subagent from your table.
 - A build works on a throwaway copy of the repo. The copy is deleted when the run ends. The
   result is `<run dir>/build.patch` (the script prints its path); apply it with `git apply`.
   `ROUTING_KIT_KEEP_RUNS=1` keeps the copy for debugging.
+  A build that leaves a nested git repo (submodules), a FIFO or a hard-linked file in the copy is refused.
+  (On a git older than 2.40 a symlink to a directory is refused too.)
 - Every build brief asks for one run against the real data or real system before finishing;
   sample data alone lets broken builds through.
 - The build scripts never merge: review the diff, run the checks yourself, then merge. Run

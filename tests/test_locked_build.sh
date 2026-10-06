@@ -1132,5 +1132,40 @@ else
   fail "cleanup: the TERM-ignoring fake claude never started"
 fi
 
+# --- a jailed build that leaves a nested git repo (the jail may write anywhere
+# in wt except wt/.git itself) is refused with exit 4, and its filter never runs ---
+mk_native_claude_nested_git() {
+  nested_mark_dir="$1"
+  root=$(mktmp)
+  versdir="$root/.local/share/claude/versions/9.9.9"
+  mkdir -p "$versdir" "$root/.local/bin"
+  bin="$versdir/claude"
+  cat > "$bin" <<EOF
+#!/bin/bash
+mkdir -p sub/.git
+printf '[filter "x"]\n\tclean = touch $nested_mark_dir/nested-clean\n' > sub/.git/config
+echo '* filter=x' > sub/.gitattributes
+echo data > sub/f.txt
+printf '{"usage":{"input_tokens":1,"output_tokens":1}}\n'
+EOF
+  chmod +x "$bin"
+  link="$root/.local/bin/claude"
+  ln -s "$bin" "$link"
+  echo "$link"
+}
+kit_home=$(mktmp)
+write_profile "$kit_home" true
+repo=$(mk_src_repo)
+nested_marks=$(mktmp)
+nested_claude=$(mk_native_claude_nested_git "$nested_marks")
+out=$(run_locked_build "$kit_home" "$nested_claude" "$keychain_hit" "$repo" run-clean-nested "$BRIEF" ROUTING_KIT_KEEP_RUNS=0 2>&1)
+code=$?
+assert_eq 4 "$code" "a nested git repo left by the build is refused with exit 4"
+assert_contains "$out" "refusing to stage the build" "nested repo refusal says why"
+if [ -e "$nested_marks/nested-clean" ]; then fail "the nested repo's filter ran on the host"; else pass; fi
+run_dir=$(find "$kit_home/runs" -maxdepth 1 -name '*run-clean-nested*' 2>/dev/null | head -1)
+bulk_gone "$run_dir" "cleanup: nested-repo refusal"
+if [ -e "$run_dir/git.pristine" ] || [ -e "$run_dir/build.patch" ]; then fail "nested-repo refusal left git.pristine or a patch"; else pass; fi
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

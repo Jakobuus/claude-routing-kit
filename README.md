@@ -66,6 +66,8 @@ and may train on it. So the kit only ever runs them inside the macOS sandbox, th
 - The copy is deleted when the job ends. What you keep is a patch file (`build.patch`, in the
   job's run folder under `~/.config/routing-kit/runs`); apply it with `git apply`. Set
   `ROUTING_KIT_KEEP_RUNS=1` to keep the copy for debugging.
+  A build that leaves a nested git repo (submodules), a FIFO or a hard-linked file in the copy is refused.
+  (On a git older than 2.40 a symlink to a directory is refused too.)
 - They can only reach their own company's server.
 - A secret scan runs first. If it finds anything that looks like a key, the job does not start.
 - Your API key stays in the Mac's Keychain. The kit hands it only to that one job.

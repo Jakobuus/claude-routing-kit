@@ -85,14 +85,19 @@ assert_eq 4.000000 "$cost" "model cost uses separate input and output prices (fi
 assert_eq "" "$(bash -c '. "$1"; ledger_model_cost "$2" sample - 500000' _ "$LEDGER_SH" "$model_file")" "unknown count gives unknown cost"
 assert_eq "" "$(bash -c '. "$1"; ledger_model_cost "$2" missing 100 200' _ "$LEDGER_SH" "$model_file")" "unknown price gives unknown cost"
 
-# Staging and diff failures must override a successful provider exit.
-stage_out=$(bash -c '. "$1"; kit_git() { return 1; }; run_stage_and_diff "$2"' _ "$EXPORT_SH" "$home/wt" 2>&1); stage_code=$?
+# Staging and diff failures must override a successful provider exit. A real
+# exported run (so the preflight passes) with git itself faked to fail (rev-parse
+# succeeds, so the --attr-source probe passes).
+st_src=$(mk_src_repo)
+st_home=$(mktmp)
+st_run=$(env ROUTING_KIT_HOME="$st_home" bash -c ". \"$EXPORT_SH\"; run_export \"$st_src\" stagefail")
+stage_out=$(bash -c '. "$1"; kit_git() { case " $* " in *" rev-parse "*) return 0 ;; esac; return 1; }; run_stage_and_diff "$2"' _ "$EXPORT_SH" "$st_run/wt" 2>&1); stage_code=$?
 assert_eq 4 "$stage_code" "staging failure exits 4"
 assert_eq "could not stage the build patch" "$stage_out" "staging failure is one line"
-diff_out=$(bash -c '. "$1"; kit_git() { [ "$3" = add ]; }; run_stage_and_diff "$2"' _ "$EXPORT_SH" "$home/wt" 2>&1); diff_code=$?
+diff_out=$(bash -c '. "$1"; kit_git() { case " $* " in *" add "*|*" rev-parse "*) return 0 ;; esac; return 1; }; run_stage_and_diff "$2"' _ "$EXPORT_SH" "$st_run/wt" 2>&1); diff_code=$?
 assert_eq 4 "$diff_code" "diff failure exits 4"
 assert_contains "$diff_out" "could not read the build diff" "diff failure has one-line error"
-if [ -e "$home/build.patch" ]; then fail "diff failure leaves no build.patch behind"; else pass; fi
+if [ -e "$st_run/build.patch" ]; then fail "diff failure leaves no build.patch behind"; else pass; fi
 
 # --- secret_scan: .env file -> 5 ---
 d=$(mktmp)
@@ -554,6 +559,106 @@ if [ -e "$junk_run/wt" ]; then fail "stale sweep kept a run with a garbage owner
 claim_run=$(mktmp)
 out=$(bash -c '. "$1"; run_claim "$2"; echo $$' _ "$EXPORT_SH" "$claim_run")
 assert_eq "$out" "$(cat "$claim_run/owner.pid")" "run_claim writes the caller's pid to owner.pid"
+
+# === run_export saves a pristine git directory; git runs against it, not wt/.git ===
+src=$(mk_src_repo)
+home=$(mktmp)
+run=$(env ROUTING_KIT_HOME="$home" bash -c ". \"$EXPORT_SH\"; run_export \"$src\" metarun")
+if [ -d "$run/git.pristine" ] && [ -f "$run/git.pristine/HEAD" ] && cmp -s "$run/git.pristine/config" "$run/wt/.git/config"; then pass; else fail "run_export saves a copy of wt/.git as git.pristine"; fi
+case "$(cat "$run/git.pristine/config")" in *"$src"*) fail "the pristine config still names the source repo" ;; *) pass ;; esac
+# a real copy: no hardlinks shared with wt/.git
+shared=$(find "$run/git.pristine" -type f -links +1 | head -1)
+assert_eq "" "$shared" "git.pristine shares no hardlinks with wt/.git"
+if [ -s "$run/wt-size.kb" ]; then pass; else fail "run_export records wt's size"; fi
+# the flags (not env vars, which kit_git's env -i drops) point git at git.pristine
+gd=$(bash -c '. "$1"; kit_git --git-dir="$2/git.pristine" --work-tree="$2/wt" -C "$2/wt" rev-parse --absolute-git-dir' _ "$EXPORT_SH" "$run")
+assert_eq "$run/git.pristine" "$gd" "kit_git --git-dir/--work-tree resolves to git.pristine, not wt/.git"
+# GIT_DIR in the environment is dropped by kit_git (env -i): git would fall back to wt/.git
+gd2=$(GIT_DIR="$run/git.pristine" bash -c '. "$1"; kit_git -C "$2/wt" rev-parse --absolute-git-dir' _ "$EXPORT_SH" "$run")
+assert_eq "$run/wt/.git" "$gd2" "(why flags are needed) GIT_DIR in the env does not survive kit_git"
+# run_cleanup removes git.pristine too, keeps the small files
+env ROUTING_KIT_HOME="$home" bash -c ". \"$EXPORT_SH\"; run_cleanup \"$run\"" 2>/dev/null
+if [ -e "$run/git.pristine" ] || [ -e "$run/wt" ]; then fail "run_cleanup removes wt and git.pristine"; else pass; fi
+if [ -f "$run/wt-size.kb" ]; then pass; else fail "run_cleanup keeps the small files"; fi
+
+# --- a planted filter/fsmonitor in wt/.git/config, a crafted index and a host
+# gitattributes never run or leak: run_stage_and_diff ignores wt/.git ---
+evil_home=$(mktmp); evil_marks=$(mktmp)
+run=$(env ROUTING_KIT_HOME="$evil_home" bash -c ". \"$EXPORT_SH\"; run_export \"$src\" evilrun")
+printf '[filter "x"]\n\tclean = touch %s/clean; cat\n[core]\n\tfsmonitor = touch %s/fsmonitor\n' "$evil_marks" "$evil_marks" >> "$run/wt/.git/config"
+echo '* filter=x' > "$run/wt/.gitattributes"
+echo built > "$run/wt/built.txt"
+printed=$(bash -c '. "$1"; run_stage_and_diff "$2"' _ "$EXPORT_SH" "$run/wt" 2>/dev/null); code=$?
+assert_eq 0 "$code" "run_stage_and_diff succeeds with a poisoned wt/.git/config"
+assert_eq 0 "$(ls -A "$evil_marks" | wc -l | tr -d ' ')" "no planted command ran (found: $(ls "$evil_marks" | tr '\n' ' '))"
+assert_contains "$printed" "built.txt" "the diff still has the build's file"
+assert_contains "$printed" "filter=x" "the diff still has the planted .gitattributes as plain content"
+
+# --- run_preflight_wt: what makes it refuse ---
+preflight() { bash -c '. "$1"; run_preflight_wt "$2"; echo "exit=$?"' _ "$EXPORT_SH" "$1" "${@:2}" 2>&1; }
+fresh_run() { env ROUTING_KIT_HOME="$(mktmp)" bash -c ". \"$EXPORT_SH\"; run_export \"$src\" pf"; }
+pr=$(fresh_run)
+assert_eq "exit=0" "$(preflight "$pr/wt")" "a clean worktree passes the preflight"
+ln -s /nonexistent "$pr/wt/dangling-link"; ln -s "$pr/wt/a.txt" "$pr/wt/ok-link"
+assert_eq "exit=0" "$(preflight "$pr/wt")" "symlinks inside the worktree are fine"
+pf_refuses() { pf_out=$(preflight "$1"); assert_contains "$pf_out" "exit=4" "preflight refuses: $2"; assert_contains "$pf_out" "refusing to stage the build" "preflight says why: $2"; }
+pr=$(fresh_run); mkdir -p "$pr/wt/sub/.git"; pf_refuses "$pr/wt" "a nested .git dir"
+pr=$(fresh_run); mkdir -p "$pr/wt/sub/.GIT"; pf_refuses "$pr/wt" "a nested .GIT dir"
+pr=$(fresh_run); mkdir -p "$pr/wt/sub"; echo "gitdir: /x" > "$pr/wt/sub/.git"; pf_refuses "$pr/wt" "a gitfile"
+pr=$(fresh_run); mkfifo "$pr/wt/.gitattributes"; pf_refuses "$pr/wt" "a FIFO"
+pr=$(fresh_run); ln "$pr/wt/a.txt" "$pr/wt/linked.txt"; pf_refuses "$pr/wt" "a hard-linked file"
+pr=$(fresh_run); mkdir "$pr/wt/locked"; echo x > "$pr/wt/locked/f"; chmod 000 "$pr/wt/locked"; pf_refuses "$pr/wt" "an unreadable dir (fails closed)"; chmod 755 "$pr/wt/locked"
+pr=$(fresh_run); pf_out=$(preflight "$pr/nonexistent"); assert_contains "$pf_out" "exit=4" "preflight refuses a missing worktree"
+# growth cap: 4 MB over the export size with a 1 MB cap is refused; the default cap allows it
+pr=$(fresh_run); dd if=/dev/zero of="$pr/wt/big.bin" bs=1048576 count=4 2>/dev/null
+assert_eq "exit=0" "$(preflight "$pr/wt")" "4 MB of growth is fine under the default cap"
+pf_out=$(ROUTING_KIT_MAX_GROWTH_MB=1 preflight "$pr/wt"); assert_contains "$pf_out" "exit=4" "preflight refuses growth past ROUTING_KIT_MAX_GROWTH_MB"
+assert_contains "$pf_out" "grew by more than 1 MB" "growth refusal names the cap"
+# a pristine-less run (or a fifo) never reaches git: no hang with a FIFO .gitignore either
+pr=$(fresh_run); rm -f "$pr/wt/.gitignore"; mkfifo "$pr/wt/.gitignore"
+( bash -c '. "$1"; run_stage_and_diff "$2"; echo "exit=$?"' _ "$EXPORT_SH" "$pr/wt" >"$pr/out" 2>&1 ) &
+fp=$!; i=0
+while kill -0 "$fp" 2>/dev/null && [ "$i" -lt 100 ]; do i=$((i + 1)); sleep 0.1; done
+if kill -0 "$fp" 2>/dev/null; then { pkill -KILL -P "$fp"; kill -KILL "$fp"; wait "$fp"; } 2>/dev/null; fail "run_stage_and_diff hung on a FIFO .gitignore"
+else { wait "$fp"; } 2>/dev/null; assert_contains "$(cat "$pr/out")" "exit=4" "run_stage_and_diff refuses a FIFO .gitignore without hanging"; fi
+
+# --- a git without --attr-source (< 2.40) still works, with one extra rule:
+# no symlink to a directory in the worktree ---
+# old_git_build WT -- run_build_patch with a kit_git that rejects --attr-source,
+# like a git older than 2.40; prints "exit=N" after any message
+old_git_build() {
+  FAIL_PAT="--attr-source=HEAD" bash -c '. "$1"; eval "real_$(declare -f kit_git)"; kit_git() { case " $* " in *" $FAIL_PAT "*) return 1 ;; esac; real_kit_git "$@"; }; run_build_patch "$2"; echo "exit=$?"' _ "$EXPORT_SH" "$1" 2>&1
+}
+src=$(mk_src_repo)
+og=$(env ROUTING_KIT_HOME="$(mktmp)" bash -c ". \"$EXPORT_SH\"; run_export \"$src\" oldgit")
+echo oldgit-edit > "$og/wt/new.txt"
+out=$(old_git_build "$og/wt")
+assert_eq "exit=0" "$out" "an old git (no --attr-source) still builds a normal tree"
+assert_contains "$(cat "$og/build.patch")" "new.txt" "the old-git patch has the build's file"
+og=$(env ROUTING_KIT_HOME="$(mktmp)" bash -c ". \"$EXPORT_SH\"; run_export \"$src\" oldgit2")
+ext=$(mktmp)
+ln -s "$ext" "$og/wt/dirlink"
+out=$(old_git_build "$og/wt")
+assert_contains "$out" "exit=4" "an old git refuses a symlink to a directory"
+assert_contains "$out" "symlink to a directory" "the refusal says why"
+assert_contains "$out" "older than 2.40" "the refusal says it is the old git"
+if [ -e "$og/build.patch" ]; then fail "an old-git refusal left a build.patch"; else pass; fi
+og=$(env ROUTING_KIT_HOME="$(mktmp)" bash -c ". \"$EXPORT_SH\"; run_export \"$src\" oldgit3")
+ln -s a.txt "$og/wt/filelink"; ln -s /nonexistent "$og/wt/danglinglink"
+out=$(old_git_build "$og/wt")
+assert_eq "exit=0" "$out" "an old git allows symlinks to files (and dangling ones)"
+og=$(env ROUTING_KIT_HOME="$(mktmp)" bash -c ". \"$EXPORT_SH\"; run_export \"$src\" oldgit4")
+mkdir "$og/wt/sub"; ln -s "$ext" "$og/wt/sub/deep-dirlink"; ln -s "$og/wt/sub" "$og/wt/chain-to-dir"
+rm -f "$og/wt/sub/deep-dirlink"; mkdir "$og/wt/odd
+name"; ln -s "$ext" "$og/wt/odd
+name/link"
+out=$(old_git_build "$og/wt")
+assert_contains "$out" "exit=4" "an old git finds a dir symlink under a newline-named dir (fail closed on odd names)"
+# a new git allows the same dir symlink (attributes come from HEAD only)
+og=$(env ROUTING_KIT_HOME="$(mktmp)" bash -c ". \"$EXPORT_SH\"; run_export \"$src\" newgit")
+ln -s "$ext" "$og/wt/dirlink"
+out=$(bash -c '. "$1"; run_build_patch "$2"; echo "exit=$?"' _ "$EXPORT_SH" "$og/wt" 2>&1)
+assert_eq "exit=0" "$out" "a git with --attr-source allows symlinks to directories"
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

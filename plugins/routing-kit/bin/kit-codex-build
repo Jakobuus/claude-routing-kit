@@ -8,6 +8,7 @@
 # The repo copy is deleted when the run ends, on every exit path. The result
 # is <run dir>/build.patch (apply it with `git apply`); ROUTING_KIT_KEEP_RUNS=1
 # keeps the copy for debugging.
+# A copy holding a nested git repo, a FIFO or a hard-linked file is refused (exit 4).
 #
 # No Paseo dependency: when this runs as a background Bash job, the user
 # still sees it, since Claude is what's driving it. This script never
@@ -161,12 +162,10 @@ set +m
 if [ "$codex_code" -ne 0 ]; then
   cat "$run_dir/codex-output.txt" >&2
   # codex may have edited files before it failed. wt is deleted when the run
-  # ends, so keep those edits as a patch, best effort (kit_git: no host
-  # config, no hooks, no external diff).
+  # ends, so keep those edits as a patch, best effort, with the same git
+  # safeguards as the success path below.
   salvage=""
-  if kit_git -C "$wt" add -A >/dev/null 2>&1 \
-    && kit_git -C "$wt" diff --binary --no-ext-diff --no-textconv --cached > "$run_dir/build.patch" 2>/dev/null \
-    && [ -s "$run_dir/build.patch" ]; then
+  if run_build_patch "$wt" 2>/dev/null && [ -s "$run_dir/build.patch" ]; then
     salvage="; its partial edits are in $run_dir/build.patch"
   else
     rm -f "$run_dir/build.patch"
@@ -177,10 +176,11 @@ if [ "$codex_code" -ne 0 ]; then
   kit_die 4 "codex exec failed; see $run_dir/codex-output.txt$salvage"
 fi
 
-git -C "$wt" add -A || kit_die 4 "git add failed in $wt"
-# The same diff goes to build.patch: wt is deleted when the run ends, so that
-# file is the result. --binary, so changed or new binary files survive.
-git -C "$wt" diff --binary --cached > "$run_dir/build.patch" || kit_die 4 "git diff failed in $wt"
+# Codex just wrote this tree: run_build_patch checks it (no nested repos, FIFOs,
+# hard links or runaway growth), then stages and diffs it with git pointed at
+# the pristine .git saved outside wt, never at wt/.git. Same diff, written to
+# build.patch (wt is deleted when the run ends, so that file is the result).
+run_build_patch "$wt" || exit 4
 cat "$run_dir/build.patch"
 echo "kit-codex-build: run dir: $run_dir"
 echo "kit-codex-build: build patch: $run_dir/build.patch"

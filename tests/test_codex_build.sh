@@ -57,6 +57,9 @@ for a in "$@"; do
 done
 [ -n "$dir" ] && echo hi > "$dir/hello.txt"
 [ -n "$dir" ] && chmod 000 "$dir/.git"
+# git now runs against the pristine copy beside wt, not wt/.git: break that
+# too (a real build can't reach it; this simulates any failing git step)
+[ -n "$dir" ] && chmod 000 "$dir/../git.pristine"
 exit 0
 EOF
   chmod +x "$bindir/codex"
@@ -249,14 +252,15 @@ out=$(env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
   "$BIN" --repo "$src" --name gitfailrun --brief "$brief" 2>&1)
 code=$?
 run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
-[ -n "$run_dir" ] && chmod -R 755 "$run_dir/wt/.git" 2>/dev/null
+[ -n "$run_dir" ] && chmod -R 755 "$run_dir/wt/.git" "$run_dir/git.pristine" 2>/dev/null
 if [ "$code" -ne 0 ]; then
   pass
 else
   fail "a git add/diff failure after codex succeeded must not exit 0"
 fi
-# ... and the exported tree (even with a 000-mode .git) is deleted anyway.
-if [ -n "$run_dir" ] && [ ! -e "$run_dir/wt" ]; then
+assert_eq 4 "$code" "a git failure after codex succeeded exits 4"
+# ... and the exported tree and pristine .git (even with 000 modes) are deleted anyway.
+if [ -n "$run_dir" ] && [ ! -e "$run_dir/wt" ] && [ ! -e "$run_dir/git.pristine" ]; then
   pass
 else
   fail "the repo copy was not deleted after a git failure"
@@ -695,6 +699,255 @@ else
   { wait "$sig_pid"; } 2>/dev/null
   fail "the hanging fake codex never started"
 fi
+
+# === a build must not be able to run host commands through wt/.git ============
+# A fake codex that plants a clean filter, a textconv, an external diff command,
+# core.fsmonitor and an include.path in wt/.git/config, plus a .gitattributes
+# and .git/info/attributes using them. Every planted command touches a marker
+# file OUTSIDE wt.
+mk_fake_codex_bin_evil_git() {
+  marks="$1"
+  bindir=$(mktmp)
+  cat > "$bindir/codex" <<EOF
+#!/bin/bash
+cat >/dev/null
+dir=""; prev=""
+for a in "\$@"; do
+  if [ "\$prev" = "-C" ]; then dir="\$a"; fi
+  prev="\$a"
+done
+printf '[core]\n\tfsmonitor = touch $marks/fsmonitor\n' > "$marks/included.cfg"
+cat >> "\$dir/.git/config" <<CFG
+[filter "evil"]
+	clean = touch $marks/clean; cat
+	smudge = touch $marks/smudge; cat
+[diff "evil"]
+	textconv = touch $marks/textconv; cat
+	command = touch $marks/extdiff
+[core]
+	fsmonitor = touch $marks/fsmonitor2
+	hooksPath = $marks/hooks
+[include]
+	path = $marks/included.cfg
+CFG
+mkdir -p "$marks/hooks"
+printf '#!/bin/sh\ntouch $marks/hook\n' > "$marks/hooks/pre-commit"
+chmod +x "$marks/hooks/pre-commit"
+printf '*.txt filter=evil diff=evil\n' > "\$dir/.gitattributes"
+mkdir -p "\$dir/.git/info"
+printf '*.txt filter=evil diff=evil\n' > "\$dir/.git/info/attributes"
+echo "hello evil" > "\$dir/evil.txt"
+echo "changed" >> "\$dir/a.txt"
+exit 0
+EOF
+  chmod +x "$bindir/codex"
+  echo "$bindir"
+}
+
+marker_count() { find "$1" -maxdepth 1 -type f \( -name clean -o -name smudge -o -name textconv -o -name extdiff -o -name fsmonitor -o -name fsmonitor2 -o -name hook \) | wc -l | tr -d ' '; }
+
+for mode in ok failing; do
+  src=$(mk_src_repo)
+  brief=$(mk_brief)
+  home=$(mktmp)
+  marks=$(mktmp)
+  fakebin=$(mk_fake_codex_bin_evil_git "$marks")
+  if [ "$mode" = failing ]; then
+    # same planting, then codex fails: the salvage path must be just as safe
+    sed -i.bak 's/^exit 0$/exit 1/' "$fakebin/codex"
+  fi
+  out=$(env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+    "$BIN" --repo "$src" --name "evil$mode" --brief "$brief" 2>/dev/null)
+  code=$?
+  if [ "$mode" = ok ]; then assert_eq 0 "$code" "evil git config: the run still exits 0"; else assert_eq 4 "$code" "evil git config: a failing run still exits 4"; fi
+  assert_eq 0 "$(marker_count "$marks")" "evil git config ($mode): no planted command ran on the host (found: $(ls "$marks" | tr '\n' ' '))"
+  run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+  if [ -f "$run_dir/build.patch" ] && grep -q "hello evil" "$run_dir/build.patch" && grep -q "filter=evil" "$run_dir/build.patch" \
+    && git -C "$src" apply --check "$run_dir/build.patch" 2>/dev/null; then
+    pass
+  else
+    fail "evil git config ($mode): build.patch is missing or wrong"
+  fi
+  if [ "$mode" = ok ]; then
+    assert_eq "$(cat "$run_dir/build.patch")" "$(printf '%s\n' "$out" | sed '/^kit-codex-build: run dir: /,$d')" "evil git config: the printed diff is exactly build.patch"
+  fi
+done
+
+# --- a build that tampers with wt/.git itself (a symlinked .git, alternates, a
+# symlinked or FIFO index, a symlinked object fanout dir, or a crafted binary
+# index naming ../outside.txt) changes nothing: git runs against the pristine
+# copy beside wt and never reads wt/.git. The run succeeds, nothing is written
+# or read outside the copy, and build.patch is the build's real diff. --------
+# The refusal modes (nested repo, FIFO, hard link, growth, unreadable dir) are
+# build outputs git itself would be fooled by: exit 4, nothing runs.
+mk_fake_codex_bin_tamper() {
+  mode="$1"; marks="$2"
+  bindir=$(mktmp)
+  cat > "$bindir/codex" <<EOF
+#!/bin/bash
+cat >/dev/null
+dir=""; prev=""
+for a in "\$@"; do
+  if [ "\$prev" = "-C" ]; then dir="\$a"; fi
+  prev="\$a"
+done
+echo hi > "\$dir/hello.txt"
+case "$mode" in
+  symlink)
+    mv "\$dir/.git" "$marks/real-git"
+    ln -s "$marks/real-git" "\$dir/.git"
+    printf '[core]\n\tfsmonitor = touch $marks/fsmonitor\n' >> "$marks/real-git/config" ;;
+  alternates)
+    mkdir -p "\$dir/.git/objects/info"
+    echo "$marks" > "\$dir/.git/objects/info/alternates" ;;
+  index)
+    rm -f "\$dir/.git/index"
+    ln -s "$marks/outside/never-created" "\$dir/.git/index" ;;
+  fanout)
+    # the blob for hello.txt ("hi\n") is 45b983be...: aim its fanout dir outside
+    mkdir -p "\$dir/.git/objects"
+    ln -s "$marks/outside" "\$dir/.git/objects/45" ;;
+  fifo)
+    rm -f "\$dir/.git/index"
+    mkfifo "\$dir/.git/index" ;;
+  craftedindex)
+    # a binary index with one entry whose path is ../outside.txt, a host file
+    echo "HOST-SECRET-CONTENT" > "\$dir/../outside.txt"
+    /usr/bin/python3 - "\$dir/.git/index" <<'PY'
+import hashlib, struct, sys
+path = b"../outside.txt"
+entry = struct.pack(">10I", 0, 0, 0, 0, 0, 0, 0o100644, 0, 0, 20) + hashlib.sha1(b"blob 0\0").digest() + struct.pack(">H", len(path)) + path + b"\0"
+entry += b"\0" * ((8 - len(entry) % 8) % 8)
+body = b"DIRC" + struct.pack(">II", 2, 1) + entry
+open(sys.argv[1], "wb").write(body + hashlib.sha1(body).digest())
+PY
+    ;;
+  nested)
+    mkdir -p "\$dir/sub/.git"
+    printf '[filter "x"]\n\tclean = touch $marks/nested-clean\n' > "\$dir/sub/.git/config"
+    echo "* filter=x" > "\$dir/sub/.gitattributes"; echo data > "\$dir/sub/f.txt" ;;
+  nestedcase)
+    mkdir -p "\$dir/sub/.GIT"
+    echo data > "\$dir/sub/f.txt" ;;
+  gitfile)
+    echo "gitdir: $marks/outside" > "\$dir/sub.gitfile"; mkdir -p "\$dir/mod"; echo "gitdir: $marks/outside" > "\$dir/mod/.git" ;;
+  fifoattr)
+    mkfifo "\$dir/.gitattributes" ;;
+  hardlink)
+    ln "\$dir/a.txt" "\$dir/a-link.txt" ;;
+  growth)
+    dd if=/dev/zero of="\$dir/big.bin" bs=1048576 count=4 2>/dev/null ;;
+  unreadable)
+    mkdir "\$dir/locked"; echo x > "\$dir/locked/f"; chmod 000 "\$dir/locked" ;;
+esac
+exit 0
+EOF
+  chmod +x "$bindir/codex"
+  echo "$bindir"
+}
+run_tamper() {
+  # run_tamper MODE [EXTRA_ENV...] -- sets out, code, run_dir, marks, src; 60s deadline
+  rt_mode="$1"; shift
+  src=$(mk_src_repo)
+  brief=$(mk_brief)
+  home=$(mktmp)
+  marks=$(mktmp)
+  mkdir -p "$marks/outside"
+  fakebin=$(mk_fake_codex_bin_tamper "$rt_mode" "$marks")
+  out=$(run_with_timeout 60 env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" "$@" "$BIN" --repo "$src" --name "tamper$rt_mode" --brief "$brief" 2>&1)
+  code=$?
+  run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+}
+for mode in symlink alternates index fanout fifo craftedindex; do
+  run_tamper "$mode"
+  assert_eq 0 "$code" "tampered wt/.git ($mode) changes nothing: the run still exits 0"
+  assert_eq 0 "$(ls -A "$marks/outside" | wc -l | tr -d ' ')" "tampered wt/.git ($mode): nothing was written outside the copy"
+  assert_eq 0 "$(marker_count "$marks")" "tampered wt/.git ($mode): nothing ran on the host"
+  if [ -f "$run_dir/build.patch" ] && grep -q "hello.txt" "$run_dir/build.patch" && ! grep -q "HOST-SECRET" "$run_dir/build.patch" \
+    && git -C "$src" apply --check "$run_dir/build.patch" 2>/dev/null; then pass; else fail "tampered wt/.git ($mode): build.patch is missing, wrong, or leaked a host file"; fi
+  if [ -e "$run_dir/wt" ] || [ -e "$run_dir/git.pristine" ]; then fail "tampered wt/.git ($mode): the copy was not deleted"; else pass; fi
+done
+for mode in nested nestedcase gitfile fifoattr hardlink growth unreadable; do
+  extra=""
+  [ "$mode" = growth ] && extra="ROUTING_KIT_MAX_GROWTH_MB=1"
+  run_tamper "$mode" $extra
+  assert_eq 4 "$code" "a build with $mode is refused with exit 4 (no hang)"
+  assert_contains "$out" "refusing to stage the build" "$mode: says why"
+  assert_eq 0 "$(marker_count "$marks")" "$mode: nothing ran on the host"
+  if [ -e "$marks/nested-clean" ]; then fail "$mode: the nested repo's filter ran"; else pass; fi
+  if [ -e "$run_dir/wt" ] || [ -e "$run_dir/git.pristine" ]; then fail "$mode: the copy was not deleted"; else pass; fi
+  if [ -e "$run_dir/build.patch" ]; then fail "$mode: a refused build left a build.patch"; else pass; fi
+done
+
+# --- the diff ignores the host's git config (kit_git): a user's diff.noprefix
+# must not change build.patch, or `git apply` of it would break ---
+src=$(mk_src_repo)
+brief=$(mk_brief)
+home=$(mktmp)
+fakehome=$(mktmp)
+printf '[diff]\n\tnoprefix = true\n' > "$fakehome/.gitconfig"
+fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
+env HOME="$fakehome" PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name hostcfg --brief "$brief" >/dev/null 2>&1
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+case "$(head -n 1 "$run_dir/build.patch")" in
+  "diff --git a/hello.txt b/hello.txt") pass ;;
+  *) fail "the host's diff.noprefix leaked into build.patch: $(head -n 1 "$run_dir/build.patch")" ;;
+esac
+
+# === attributes come from HEAD only (git --attr-source=HEAD) ====================
+# (1) a build swaps the tracked dir sub/ for a symlink to an outside dir that
+# holds a .gitattributes marking everything binary: git follows the symlinked
+# parent when it looks up attributes for the deleted sub/file.txt. The patch
+# must be byte-identical to the one from the same build with no outside file.
+# (2) the build's own new .gitattributes (* binary) must not change how its
+# edits are diffed either.
+mk_fake_codex_bin_attr() {
+  mode="$1"; ext="$2"
+  bindir=$(mktmp)
+  cat > "$bindir/codex" <<EOF
+#!/bin/bash
+cat >/dev/null
+dir=""; prev=""
+for a in "\$@"; do
+  if [ "\$prev" = "-C" ]; then dir="\$a"; fi
+  prev="\$a"
+done
+case "$mode" in
+  symlinkdir)
+    rm -rf "\$dir/sub"
+    ln -s "$ext" "\$dir/sub" ;;
+  ownattrs)
+    echo "* binary" > "\$dir/.gitattributes"
+    echo "changed text" >> "\$dir/a.txt" ;;
+esac
+exit 0
+EOF
+  chmod +x "$bindir/codex"
+  echo "$bindir"
+}
+attr_run() {
+  # attr_run MODE EXT -- echoes the build.patch path of a fresh run (a repo with a tracked sub/file.txt)
+  ar_src=$(mk_src_repo)
+  mkdir -p "$ar_src/sub"; printf 'line one\nline two\n' > "$ar_src/sub/file.txt"
+  git -C "$ar_src" add sub; git -C "$ar_src" commit -q -m sub
+  ar_home=$(mktmp)
+  ar_bin=$(mk_fake_codex_bin_attr "$1" "$2")
+  env PATH="$ar_bin:/usr/bin:/bin" ROUTING_KIT_HOME="$ar_home" ROUTING_KIT_KEEP_RUNS=1 \
+    "$BIN" --repo "$ar_src" --name attrrun --brief "$(mk_brief)" >/dev/null 2>&1
+  ar_code=$?
+  ar_patch=$(find "$ar_home/runs" -mindepth 1 -maxdepth 1 -type d | head -1)/build.patch
+}
+ext=$(mktmp)
+attr_run symlinkdir "$ext"; clean_patch=$(cat "$ar_patch"); assert_eq 0 "$ar_code" "symlinked-dir build (clean) exits 0"
+echo "* binary" > "$ext/.gitattributes"
+attr_run symlinkdir "$ext"; evil_patch=$(cat "$ar_patch"); assert_eq 0 "$ar_code" "symlinked-dir build (outside .gitattributes) exits 0"
+assert_contains "$clean_patch" "-line one" "the deleted file shows as a text diff in the clean run"
+assert_eq "$clean_patch" "$evil_patch" "an outside .gitattributes reached through a symlinked dir does not change the patch"
+attr_run ownattrs "$ext"; own_patch=$(cat "$ar_patch")
+assert_eq 0 "$ar_code" "own-.gitattributes build exits 0"
+assert_contains "$own_patch" "+changed text" "a build's own '* binary' .gitattributes does not turn its edits into binary patches"
+case "$own_patch" in *"GIT binary patch"*) fail "the build's own .gitattributes changed the patch to binary" ;; *) pass ;; esac
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

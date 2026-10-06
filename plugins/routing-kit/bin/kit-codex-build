@@ -5,6 +5,10 @@
 #   run_export -> codex exec -m MODEL -s workspace-write -C wt < brief
 #   -> print the diff and run dir -> ledger_append codex
 #
+# The repo copy is deleted when the run ends, on every exit path. The result
+# is <run dir>/build.patch (apply it with `git apply`); ROUTING_KIT_KEEP_RUNS=1
+# keeps the copy for debugging.
+#
 # No Paseo dependency: when this runs as a background Bash job, the user
 # still sees it, since Claude is what's driving it. This script never
 # merges; the caller reviews the printed diff.
@@ -70,11 +74,26 @@ esac
 # kit_die (i.e. exit) if it can't create $KIT_HOME, and without the
 # subshell that exit would overwrite the status this trap is supposed to
 # be preserving. A warning goes to stderr instead; the original exit code
-# always wins.
+# always wins. The repo copy is deleted here too (run_cleanup never fails and
+# only touches the run dir's wt/home/cfg/tmp); run_dir is still empty on
+# exits before run_export, and run_cleanup does nothing for an empty path.
+codex_pid=""
 on_exit() {
   code=$?
+  # If the script is cut short (SIGTERM/SIGINT, or a kit_die) while codex is
+  # still running, stop codex and everything it started BEFORE the repo copy
+  # goes: TERM the whole process group, a short grace period, then KILL.
+  if [ -n "$codex_pid" ]; then
+    {
+      kill -TERM -"$codex_pid" 2>/dev/null || kill "$codex_pid" 2>/dev/null
+      sleep 0.3
+      kill -KILL -"$codex_pid" 2>/dev/null || kill -KILL "$codex_pid" 2>/dev/null
+      wait "$codex_pid"
+    } 2>/dev/null
+  fi
   ( ledger_append codex "${MODEL:--}" "$NAME" - - "$code" ) \
     || echo "kit-codex-build: warning: could not write a ledger line" >&2
+  [ -n "${run_dir:-}" ] && { run_cleanup "$run_dir" || true; }
   exit "$code"
 }
 trap on_exit EXIT
@@ -90,6 +109,7 @@ command -v codex >/dev/null 2>&1 \
 # run_export exits 2 itself on a dirty repo, no HEAD, or a non-repo path.
 run_dir=$(run_export "$REPO" "$NAME") || exit $?
 wt="$run_dir/wt"
+run_claim "$run_dir"
 
 # secret_scan's filename-based rules (.env*, *.pem, id_rsa*, ...) key off
 # the brief's own name. Renaming it to a fixed "brief.md" snapshot would
@@ -117,14 +137,50 @@ fi
 
 # Never pass --dangerously-bypass-approvals-and-sandbox: workspace-write is
 # the sandbox, never full-access.
-if ! codex exec -m "$MODEL" -s workspace-write -C "$wt" < "$brief_snapshot" > "$run_dir/codex-output.txt" 2>&1; then
+#
+# codex runs in the background under its own process group (set -m, like
+# locked-build), and we `wait` for it: a signal to this script then reaches
+# on_exit while codex is still running, which can kill the whole group before
+# it deletes wt. The exit status, the output file and stdin are exactly what
+# the old foreground call gave.
+set -m
+codex exec -m "$MODEL" -s workspace-write -C "$wt" < "$brief_snapshot" > "$run_dir/codex-output.txt" 2>&1 &
+codex_pid=$!
+wait "$codex_pid"
+codex_code=$?
+# codex has exited; anything it left running in its group goes too, before
+# the diff below is taken.
+{
+  kill -TERM -"$codex_pid" 2>/dev/null
+  sleep 0.3
+  kill -KILL -"$codex_pid" 2>/dev/null
+} 2>/dev/null
+codex_pid=""
+set +m
+
+if [ "$codex_code" -ne 0 ]; then
   cat "$run_dir/codex-output.txt" >&2
-  if grep -Eiq 'not logged in|please log in|authentication required|unauthorized|run codex login' "$run_dir/codex-output.txt"; then
-    kit_die 3 "Codex is not logged in; run codex login"
+  # codex may have edited files before it failed. wt is deleted when the run
+  # ends, so keep those edits as a patch, best effort (kit_git: no host
+  # config, no hooks, no external diff).
+  salvage=""
+  if kit_git -C "$wt" add -A >/dev/null 2>&1 \
+    && kit_git -C "$wt" diff --binary --no-ext-diff --no-textconv --cached > "$run_dir/build.patch" 2>/dev/null \
+    && [ -s "$run_dir/build.patch" ]; then
+    salvage="; its partial edits are in $run_dir/build.patch"
+  else
+    rm -f "$run_dir/build.patch"
   fi
-  kit_die 4 "codex exec failed; see $run_dir/codex-output.txt"
+  if grep -Eiq 'not logged in|please log in|authentication required|unauthorized|run codex login' "$run_dir/codex-output.txt"; then
+    kit_die 3 "Codex is not logged in; run codex login$salvage"
+  fi
+  kit_die 4 "codex exec failed; see $run_dir/codex-output.txt$salvage"
 fi
 
 git -C "$wt" add -A || kit_die 4 "git add failed in $wt"
-git -C "$wt" diff --cached || kit_die 4 "git diff failed in $wt"
+# The same diff goes to build.patch: wt is deleted when the run ends, so that
+# file is the result. --binary, so changed or new binary files survive.
+git -C "$wt" diff --binary --cached > "$run_dir/build.patch" || kit_die 4 "git diff failed in $wt"
+cat "$run_dir/build.patch"
 echo "kit-codex-build: run dir: $run_dir"
+echo "kit-codex-build: build patch: $run_dir/build.patch"

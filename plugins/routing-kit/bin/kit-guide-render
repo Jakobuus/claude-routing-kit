@@ -1,0 +1,14 @@
+#!/bin/bash
+# kit-guide-render [--data F] [--out F|-] [--check] [--domains F] — renders
+# guide/guide.json to guide/FIELD-GUIDE.md, deterministically. --check exits 1
+# when the file differs from the render (or is missing). Invalid data is
+# refused, never rendered. See lib/guide_render.py.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$SCRIPT_DIR/kit-common"
+kit_require_supported
+kit_require_python3
+
+kit_python3 "$SCRIPT_DIR/../lib/guide_render.py" "$@"
+exit $?

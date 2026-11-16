@@ -1,0 +1,153 @@
+#!/bin/bash
+# kit-gemini-build --repo DIR --name NAME --brief FILE [--model ID] [--timeout SECS]
+# Runs Antigravity in a disposable copy of HEAD and leaves a reviewable patch.
+set -uo pipefail
+BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$BIN_DIR/kit-common"
+kit_require_supported
+kit_require_jq
+kit_require_python3
+. "$BIN_DIR/../lib/export.sh"
+. "$BIN_DIR/../lib/ledger.sh"
+. "$BIN_DIR/../lib/secret-scan.sh"
+REPO='' NAME='' BRIEF='' MODEL='' TIMEOUT=1800
+usage() { kit_die 2 'usage: kit-gemini-build --repo DIR --name NAME --brief FILE [--model ID] [--timeout SECS]'; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --repo|--name|--brief|--model|--timeout)
+      [ $# -ge 2 ] || usage
+      case "$1" in
+        --repo) REPO=$2;; --name) NAME=$2;; --brief) BRIEF=$2;;
+        --model) MODEL=$2;; --timeout) TIMEOUT=$2;;
+      esac
+      shift 2;;
+    *) usage;;
+  esac
+done
+[ -n "$REPO" ] && [ -n "$NAME" ] && [ -n "$BRIEF" ] || usage
+[[ $TIMEOUT =~ ^[1-9][0-9]*$ ]] || kit_die 2 '--timeout must be positive seconds'
+case "$NAME$MODEL" in *$'\t'*|*$'\n'*|*$'\r'*) kit_die 2 '--name and --model may not contain control characters';; esac
+[ -f "$BRIEF" ] || kit_die 2 "no such brief file: $BRIEF"
+agy_pid='' watchdog='' run_dir='' final_status='failed' started=$(date -u +%FT%TZ)
+on_exit() {
+  code=$?
+  trap - EXIT
+  if [ -n "$agy_pid" ]; then
+    kill -TERM -"$agy_pid" 2>/dev/null || kill "$agy_pid" 2>/dev/null
+    sleep 0.3
+    kill -KILL -"$agy_pid" 2>/dev/null || true
+    wait "$agy_pid" 2>/dev/null || true
+  fi
+  if [ -n "$watchdog" ]; then kill "$watchdog" 2>/dev/null || true; wait "$watchdog" 2>/dev/null || true; fi
+  if [ -n "$run_dir" ]; then
+    ended=$(date -u +%FT%TZ)
+    kit_jq -n --arg repo "$REPO" --arg name "$NAME" --arg model "$MODEL" \
+      --arg started "$started" --arg ended "$ended" --arg status "$final_status" \
+      --argjson exit "$code" \
+      '{repo:$repo,name:$name,model:$model,started:$started,ended:$ended,status:$status,exit:$exit}' > "$run_dir/manifest.json" || true
+    [ -f "$run_dir/result.md" ] || printf 'Build %s (exit %s).\n' "$final_status" "$code" > "$run_dir/result.md"
+    run_cleanup "$run_dir" || true
+  fi
+  ( ledger_append gemini "${MODEL:--}" "$NAME" - - "$code" ) || echo 'kit-gemini-build: warning: could not write ledger' >&2
+  exit "$code"
+}
+trap on_exit EXIT
+if [ -z "$MODEL" ]; then
+  MODEL=$(kit_jq -e -r '.gemini.build' "$BIN_DIR/../rules/models.json") || kit_die 2 'invalid Gemini model'
+fi
+agy_bin=${KIT_AGY_BIN:-agy}
+command -v "$agy_bin" >/dev/null 2>&1 || kit_die 3 'no agy on PATH: install Antigravity CLI and log in with agy'
+BASE=$(kit_git -C "$REPO" rev-parse HEAD 2>/dev/null) || kit_die 2 'no HEAD: commit first'
+REPO=$(kit_realpath "$REPO") || kit_die 2 'could not resolve source repo'
+run_dir=$(run_export "$REPO" "$NAME") || exit $?
+wt="$run_dir/wt"
+run_claim "$run_dir"
+rm -rf "$run_dir/git.pristine" || kit_die 4 'could not remove saved git directory'
+[ ! -e "$run_dir/git.pristine" ] || kit_die 4 'saved git directory remains'
+if ! secret_scan --credentials-only "$BRIEF" > "$run_dir/secret-scan-brief-name.txt" 2>&1; then
+  cat "$run_dir/secret-scan-brief-name.txt" >&2
+  kit_die 5 'secret scan found a possible secret in the brief'
+fi
+cp "$BRIEF" "$run_dir/brief.md" || kit_die 2 'could not snapshot brief'
+brief_bytes=$(wc -c < "$run_dir/brief.md" | tr -d ' ')
+if [ "$brief_bytes" -gt 102400 ]; then kit_die 2 'brief exceeds 100 KB limit'; fi
+if ! secret_scan --credentials-only "$wt" "$run_dir/brief.md" > "$run_dir/secret-scan.txt" 2>&1; then
+  cat "$run_dir/secret-scan.txt" >&2
+  kit_die 5 'secret scan found a possible secret'
+fi
+prompt=$(cat "$run_dir/brief.md")
+# Job control gives agy and its children their own process group.
+set -m
+# agy runs under the user's own account and login, but not with the caller's whole
+# environment: only an allowlist goes through (HOME, PATH, TERM, TMPDIR, USER,
+# LOGNAME, SHELL, LANG, LC_*, XDG_{CONFIG,DATA,CACHE,STATE}_HOME, and agy's own
+# ANTIGRAVITY_*/AGY_* variables; plus
+# KIT_AGY_* for the test suite). Anything that looks like a credential (*TOKEN*,
+# *KEY*, *SECRET*, *PASSWORD*, GH_*, GITHUB_*, SSH_AUTH_SOCK, AWS_*) is dropped
+# even when its name would otherwise be allowed. DBUS_SESSION_BUS_ADDRESS and
+# XDG_RUNTIME_DIR (the user's session bus, and with it the desktop keyring) are
+# dropped too unless the caller sets KIT_AGY_ALLOW_DBUS=1 (never forwarded itself). Inherited file descriptors above
+# 2 are closed.
+agy_env=()
+for var_name in $(compgen -v); do
+  case "$var_name" in
+    KIT_AGY_ALLOW_DBUS) continue ;;
+    HOME|PATH|TERM|TMPDIR|USER|LOGNAME|SHELL|LANG|LC_*|ANTIGRAVITY_*|AGY_*|KIT_AGY_*) ;;
+    XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_CACHE_HOME|XDG_STATE_HOME) ;;
+    DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR) [ "${KIT_AGY_ALLOW_DBUS:-}" = 1 ] || continue ;;
+    *) continue ;;
+  esac
+  case "$var_name" in
+    *TOKEN*|*KEY*|*SECRET*|*PASSWORD*|GH_*|GITHUB_*|SSH_AUTH_SOCK|AWS_*) continue ;;
+  esac
+  export_check=$(export -p | grep -c "^declare -x $var_name=")
+  [ "$export_check" -gt 0 ] || continue
+  agy_env[${#agy_env[@]}]="$var_name=${!var_name}"
+done
+agy_path=$(command -v "$agy_bin")
+(kit_close_extra_fds; cd "$wt" && exec env -i ${agy_env[@]+"${agy_env[@]}"} "$agy_path" --sandbox --disable-slash-commands --model "$MODEL" --output-format json --print-timeout "${TIMEOUT}s" -p "$prompt" </dev/null) > "$run_dir/agy.json" 2> "$run_dir/agy.stderr" &
+agy_pid=$!
+"$KIT_PYTHON3_BIN" -I - "$TIMEOUT" "$agy_pid" "$run_dir/watchdog-$NAME" >/dev/null 2>&1 <<'PYWATCH' &
+import os, signal, sys, time
+time.sleep(int(sys.argv[1]))
+pid = int(sys.argv[2])
+try:
+    os.killpg(pid, signal.SIGTERM)
+except ProcessLookupError:
+    pass
+time.sleep(0.3)
+try:
+    os.killpg(pid, signal.SIGKILL)
+except ProcessLookupError:
+    pass
+PYWATCH
+watchdog=$!
+wait "$agy_pid"
+agy_code=$?
+kill "$watchdog" 2>/dev/null || true
+wait "$watchdog" 2>/dev/null || true
+watchdog=''
+kill -TERM -"$agy_pid" 2>/dev/null || true
+sleep 0.3
+kill -KILL -"$agy_pid" 2>/dev/null || true
+agy_pid=''
+set +m
+if [ "$agy_code" -ne 0 ]; then
+  run_build_patch_gemini "$wt" "$REPO" "$BASE" 2>/dev/null || rm -f "$run_dir/build.patch"
+  if grep -Eiq 'not logged in|please log in|authentication required|unauthorized' "$run_dir/agy.stderr" "$run_dir/agy.json"; then
+    kit_die 3 "agy is not logged in; run agy; see $run_dir/agy.stderr"
+  fi
+  kit_die 4 "agy failed or timed out; see $run_dir/agy.stderr and $run_dir/agy.json"
+fi
+if ! kit_jq -e '.status == "SUCCESS" and (.response | type == "string")' "$run_dir/agy.json" >/dev/null 2>&1; then
+  kit_die 4 "agy returned an invalid or unsuccessful result; see $run_dir/agy.json"
+fi
+kit_jq -r '.response' "$run_dir/agy.json" > "$run_dir/result.md"
+if kit_jq -e '(.denied_actions // []) | length > 0' "$run_dir/agy.json" >/dev/null; then
+  echo 'kit-gemini-build: WARNING: agy denied actions; steps may be unverified. Inspect agy.json and rerun checks yourself.' >&2
+fi
+run_build_patch_gemini "$wt" "$REPO" "$BASE" || exit 4
+final_status='success'
+cat "$run_dir/build.patch"
+echo "kit-gemini-build: run dir: $run_dir"
+echo "kit-gemini-build: build patch: $run_dir/build.patch"

@@ -235,13 +235,22 @@ run_preflight_wt() {
 # is made. On an older git the preflight refuses dir symlinks instead, and a
 # build's own .gitattributes may affect the patch's formatting (accepted).
 run_build_patch() {
-  local worktree="$1" run_dir patch pristine attr old_git
+  local worktree="$1" run_dir patch pristine attr old_git expected head
   run_dir="$(dirname "$worktree")"
   patch="$run_dir/build.patch"
-  pristine="$run_dir/git.pristine"
+  pristine="${2:-$run_dir/git.pristine}"
+  expected="${3:-}"
+  rm -f "$patch"
   if [ ! -d "$pristine" ]; then
     echo "refusing to stage the build in $worktree: no pristine git directory was saved" >&2
     return 4
+  fi
+  if [ -n "$expected" ]; then
+    head=$(kit_git --git-dir="$pristine" rev-parse HEAD 2>/dev/null) || head=''
+    if [ "$head" != "$expected" ]; then
+      echo "refusing to stage the build in $worktree: pristine HEAD differs from source BASE" >&2
+      return 4
+    fi
   fi
   # git 2.40+: attributes from HEAD only. Older git: no such option, so the
   # preflight refuses symlinks to directories instead.
@@ -264,6 +273,60 @@ run_build_patch() {
     return 4
   fi
   return 0
+}
+
+# Gemini creates its staging repository only after agy and its process group
+# have exited. Nothing from the agent's .git or the old git.pristine is used.
+run_build_patch_gemini() {
+  local worktree="$1" source="$2" base="$3" patch
+  patch="$(dirname "$worktree")/build.patch"
+  rm -f "$patch"
+  if (
+    local scratch attr old_git filters filter_status
+    scratch=$(mktemp -d "${TMPDIR:-/tmp}/kit-gemini-git.XXXXXX") || exit 4
+    trap 'rm -rf "$scratch"' EXIT
+    chmod 700 "$scratch" || exit 4
+    mkdir "$scratch/home" || exit 4
+    # The index, home, configuration and object store are all new. The clone
+    # has no checkout, so source attributes and filters cannot run here.
+    gemini_git() {
+      env -i PATH=/usr/bin:/bin HOME="$scratch/home" \
+        GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 \
+        GIT_NO_REPLACE_OBJECTS=1 GIT_INDEX_FILE="$scratch/index" \
+        git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+          -c core.attributesFile=/dev/null "$@"
+    }
+    gemini_git clone --template= --no-local --no-checkout --no-hardlinks \
+      "$source" "$scratch/git" >/dev/null 2>&1 || exit 4
+    gemini_git -C "$scratch/git" cat-file -e "$base^{commit}" || exit 4
+    # A fresh clone should have no filter drivers. Refuse an unexpected one
+    # rather than allowing its clean command to run during add.
+    filters=$(gemini_git -C "$scratch/git" config --local --name-only \
+      --get-regexp '^filter\..*\.(clean|process)$' 2>/dev/null)
+    filter_status=$?
+    [ "$filter_status" -eq 1 ] || exit 4
+    [ -z "$filters" ] || exit 4
+    rm -f "$scratch/git/.git/info/attributes" || exit 4
+    [ ! -e "$scratch/git/.git/info/attributes" ] || exit 4
+    attr=()
+    old_git=1
+    if gemini_git --attr-source="$base" -C "$scratch/git" rev-parse "$base" >/dev/null 2>&1; then
+      attr=(--attr-source="$base")
+      old_git=0
+    fi
+    run_preflight_wt "$worktree" "$old_git" || exit 4
+    gemini_git -C "$scratch/git" read-tree "$base" || exit 4
+    gemini_git ${attr[@]+"${attr[@]}"} --git-dir="$scratch/git/.git" \
+      --work-tree="$worktree" -c submodule.recurse=false add -A >/dev/null 2>&1 || exit 4
+    gemini_git ${attr[@]+"${attr[@]}"} --git-dir="$scratch/git/.git" \
+      --work-tree="$worktree" diff --cached --binary --no-ext-diff \
+      --no-textconv --ignore-submodules=all "$base" > "$patch" 2>/dev/null || exit 4
+  ); then
+    return 0
+  fi
+  rm -f "$patch"
+  echo 'could not safely stage the Gemini build patch' >&2
+  return 4
 }
 
 # Stage a provider's scratch tree and print its complete diff (run_build_patch,

@@ -1,0 +1,1192 @@
+{
+  "version": 1,
+  "checked": "2026-11-15",
+  "summary": "Claude owns judgment, terminal work and knowledge work. OpenAI owns cheap competent volume. Gemini owns very long context. Fable 5.2 is the strongest model overall (Artificial Analysis Intelligence Index 65), but at max effort it costs $26.54 per index task against $1.27 for GPT-6.1 Sol. Escalate to it; do not default to it.",
+  "headline_benches": [
+    "Terminal-Bench 4.0",
+    "GDPval-AA"
+  ],
+  "bottom_line": [
+    {
+      "work": "Plans, architecture, judgment calls",
+      "send_to": "Claude Opus 5.5 (medium, high for checks)",
+      "why": "Anthropic's recommended daily driver; #1 on GDPval-AA knowledge work (1866) and WebDev Arena (1810)",
+      "sources": [
+        "https://www.anthropic.com/claude-fable-and-mythos-5-2",
+        "https://artificialanalysis.ai/evaluations/gdpval-aa"
+      ]
+    },
+    {
+      "work": "Hardest coding, long unattended runs",
+      "send_to": "Claude Fable 5.2 at high, not max",
+      "why": "Leads FrontierCode 2.0 (49.1% vs Opus 45.5%) and Remote Labor Index (41.3% vs 21.3%). High scores 62 for $9.08 a task vs 65 for $26.54 at max",
+      "sources": [
+        "https://www.anthropic.com/claude-fable-and-mythos-5-2",
+        "https://smartscope.blog/en/blog/claude-fable-5-2-tops-artificial-analysis-intelligence-2026/"
+      ]
+    },
+    {
+      "work": "Everyday features, fixes, tests",
+      "send_to": "Claude Sonnet 5.5 (medium/high) or GPT-6.1 Sol; pick by quota",
+      "why": "Sonnet 64.1% vs Sol 55.1% on Terminal-Bench 4.0 (Vals). Sol is the cheapest strong model per task",
+      "sources": [
+        "https://www.vals.ai/benchmarks/terminal-bench-4",
+        "https://artificialanalysis.ai/leaderboards/models"
+      ]
+    },
+    {
+      "work": "Code review across families",
+      "send_to": "GPT-6.1 Sol for everyday Claude changes; GPT-6 Astra for risky changes; Opus 5.5 on Codex or Gemini work",
+      "why": "Astra led CodeRabbit's bug-coverage eval (61.3%); Opus caught 10 of 13 hard bugs at max",
+      "sources": [
+        "https://coderabbit.ai/blog/gpt-6-astra-code-review-evaluation",
+        "https://www.coderabbit.ai/blog/opus-5-5-model-review"
+      ]
+    },
+    {
+      "work": "Whole-repo reads, 300K+ tokens of context",
+      "send_to": "Gemini 4 Argon (Antigravity)",
+      "why": "GraphWalks 256K-1M: 84.2% vs Opus 66.8% (Google-run). Check its factual claims about code",
+      "sources": [
+        "https://www.datacamp.com/blog/gemini-4-argon"
+      ]
+    },
+    {
+      "work": "Very long single outputs",
+      "send_to": "Gemini 4 Argon",
+      "why": "Up to 1M output tokens vs 128K for Claude and GPT",
+      "sources": [
+        "https://www.datacamp.com/blog/gemini-4-argon",
+        "https://platform.claude.com/docs/en/about-claude/models/overview",
+        "https://www.dsebastien.net/gpt-6-1-sol/"
+      ]
+    },
+    {
+      "work": "Screenshots, UI checks, computer use, prose from supplied material",
+      "send_to": "GPT-6.1 Terra",
+      "why": "OpenAI's own pick for these; lowest hallucination rate in the GPT-6 family; $0.96 per index task",
+      "sources": [
+        "https://learn.chatgpt.com/docs/models",
+        "https://artificialanalysis.ai/leaderboards/models"
+      ]
+    },
+    {
+      "work": "Read-only search, triage, summaries",
+      "send_to": "Claude Haiku 5.5, or Gemini 4 Hydrogen on Google quota",
+      "why": "Haiku $0.41 per index task; Hydrogen scores 54 (xhigh) at $3.16",
+      "sources": [
+        "https://artificialanalysis.ai/leaderboards/models"
+      ]
+    },
+    {
+      "work": "Bulk mechanical edits, extraction",
+      "send_to": "GPT-6 Luna at high",
+      "why": "$0.15 per index task; low effort is useless for agent work",
+      "sources": [
+        "https://artificialanalysis.ai/leaderboards/models"
+      ]
+    },
+    {
+      "work": "Anything reading untrusted web pages or email",
+      "send_to": "Claude Opus 5.5",
+      "why": "Prompt-injection success 0.96% vs 4.09% for Fable 5.2 (Gray Swan, 15 tries)",
+      "sources": []
+    }
+  ],
+  "comparison_note": "On independent scores the top cluster is Fable 5.2, Gemini 4 Carbon, Opus 5.5 and GPT-6 Astra. The value frontier runs through GPT-6.1 Sol and Terra. Sonnet 5.5 at max is the trap: Opus-level cost for a lower score. Subscription users do not pay API prices; prices show relative cost. GDPval-AA is at each model's highest listed effort.",
+  "models": [
+    {
+      "id": "claude-fable-5-2",
+      "family": "claude",
+      "name": "Claude Fable 5.2",
+      "released": "2026-11-09",
+      "price_in": 8,
+      "price_out": 40,
+      "use_for": "Hardest coding and long unattended runs, at high effort; escalate to it rather than default to it",
+      "summary": "Anthropic positions it for the most ambitious open-ended technical work, and as an advisor or orchestrator over smaller models.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "65.2%",
+          "run_by": "independent",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "GDPval-AA",
+          "value": "1831",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "bench": "AA Intelligence Index v5",
+          "value": "65 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "AA cost per index task",
+          "value": "$26.54 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "FrontierCode 2.0",
+          "value": "49.1% at xhigh effort",
+          "run_by": "vendor",
+          "source": "https://www.anthropic.com/claude-fable-and-mythos-5-2"
+        },
+        {
+          "bench": "Remote Labor Index",
+          "value": "41.3% at high effort",
+          "run_by": "vendor",
+          "source": "https://www.anthropic.com/claude-fable-and-mythos-5-2"
+        },
+        {
+          "bench": "FrontierSWE v2",
+          "value": "69.9%",
+          "run_by": "vendor",
+          "source": "https://www.anthropic.com/claude-fable-and-mythos-5-2"
+        },
+        {
+          "bench": "HLE with tools",
+          "value": "74.2%",
+          "run_by": "vendor",
+          "source": "https://www.anthropic.com/claude-fable-and-mythos-5-2"
+        },
+        {
+          "bench": "OSWorld 2.1",
+          "value": "89.3%",
+          "run_by": "vendor",
+          "source": "https://www.anthropic.com/claude-fable-and-mythos-5-2"
+        }
+      ],
+      "pros": [
+        {
+          "text": "Best overall model on independent scoring: AA Intelligence Index 65 at max effort, five points above the next model.",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "text": "Biggest leads are on long jobs: Remote Labor Index 41.3% vs Opus 5.5's 21.3%, FrontierSWE v2 69.9% vs 62.3%. Also leads HLE with tools (74.2% vs 67.7%) and OSWorld 2.1 (89.3% vs 87.2%), all Anthropic-run.",
+          "source": "https://www.anthropic.com/claude-fable-and-mythos-5-2"
+        },
+        {
+          "text": "High effort is the sweet spot: it scores 62 on the AA index for $9.08 a task, against 65 for $26.54 at max.",
+          "source": "https://smartscope.blog/en/blog/claude-fable-5-2-tops-artificial-analysis-intelligence-2026/"
+        },
+        {
+          "text": "On FrontierCode 2.0, high effort scores about the same as Opus 5.5's best (45.3% vs 45.5%) for roughly half the cost per task.",
+          "source": "https://claudefa.st/blog/models/claude-fable-5-2-vs-opus-5-5"
+        }
+      ],
+      "cons": [
+        {
+          "text": "Max effort costs $26.54 per AA index task and generated 275M output tokens across the index.",
+          "source": "https://smartscope.blog/en/blog/claude-fable-5-2-tops-artificial-analysis-intelligence-2026/"
+        },
+        {
+          "text": "At max it takes 41.7 minutes per index task, and GPT-6 Astra used 54M output tokens across the same index.",
+          "source": null
+        },
+        {
+          "text": "Cyber and bio requests silently re-run on Opus 4.8 or Opus 5, so its security behaviour describes the routed system, not the model alone.",
+          "source": "https://www.anthropic.com/claude-fable-and-mythos-5-2"
+        },
+        {
+          "text": "Prompt-injection success is 4.09% vs Opus 5.5's 0.96% (Gray Swan, 15 tries), attributed to that fallback.",
+          "source": null
+        },
+        {
+          "text": "Loses to Opus 5.5 on knowledge-work Elo (GDPval-AA 1831 vs 1866).",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "text": "Regressed on ProgramBench (85.6% vs 5.1's 87.6%). Practitioners report it follows notes very literally and sometimes ends turns early.",
+          "source": null
+        }
+      ]
+    },
+    {
+      "id": "claude-opus-5-5",
+      "family": "claude",
+      "name": "Claude Opus 5.5",
+      "released": "2026-09-22",
+      "price_in": 4,
+      "price_out": 20,
+      "use_for": "Plans, architecture, judgment calls, review of Codex or Gemini work, untrusted input",
+      "summary": "Anthropic calls it the strongest daily driver and the default starting point. It is the Claude Code default on every paid plan.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "65.2%",
+          "run_by": "independent",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "GDPval-AA",
+          "value": "1866",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "bench": "AA Intelligence Index v5",
+          "value": "59 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "AA cost per index task",
+          "value": "$10.04 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "FrontierCode 2.0",
+          "value": "45.5%",
+          "run_by": "vendor",
+          "source": "https://www.anthropic.com/claude-fable-and-mythos-5-2"
+        },
+        {
+          "bench": "FrontierSWE v2",
+          "value": "62.3%",
+          "run_by": "vendor",
+          "source": "https://www.anthropic.com/claude-fable-and-mythos-5-2"
+        }
+      ],
+      "pros": [
+        {
+          "text": "Top GDPval-AA knowledge-work Elo (1866 at max effort), ahead of Fable 5.2 (1831).",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "text": "Ties Fable 5.2 on Terminal-Bench 4.0 under Vals' harness (65.2%).",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "text": "#1 on WebDev Arena (1810).",
+          "source": null
+        },
+        {
+          "text": "Best Claude for untrusted input (0.96% prompt-injection success).",
+          "source": null
+        },
+        {
+          "text": "CodeRabbit: caught 10 of 13 hard review bugs at max effort.",
+          "source": "https://www.coderabbit.ai/blog/opus-5-5-model-review"
+        },
+        {
+          "text": "Practitioners rate it best for design and product judgment.",
+          "source": "https://every.to/vibe-check/vibe-check-opus-5-5-is-pulling-our-codex-converts-back-to-claude"
+        }
+      ],
+      "cons": [
+        {
+          "text": "Runs for minutes or hours unless given a budget, and buries the main point in prose (Every).",
+          "source": "https://every.to/vibe-check/vibe-check-opus-5-5-is-pulling-our-codex-converts-back-to-claude"
+        },
+        {
+          "text": "Uses about 1.6x Opus 5's output tokens.",
+          "source": null
+        },
+        {
+          "text": "Slowest to first token in AA's tests (379 s at max).",
+          "source": null
+        },
+        {
+          "text": "One practitioner saw it trust a subagent's report instead of reading the diff and ship an account-takeover bug.",
+          "source": null
+        }
+      ]
+    },
+    {
+      "id": "claude-sonnet-5-5",
+      "family": "claude",
+      "name": "Claude Sonnet 5.5",
+      "released": "2026-09-28",
+      "price_in": 2,
+      "price_out": 10,
+      "use_for": "Everyday features, fixes and tests at medium or high effort; per-PR review",
+      "summary": "The fast mid-tier for well-scoped work; same list price as GPT-6.1 Sol.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "64.1%",
+          "run_by": "independent",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "GDPval-AA",
+          "value": "1838",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "bench": "AA Intelligence Index v5",
+          "value": "55 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "AA cost per index task",
+          "value": "$10.02 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        }
+      ],
+      "pros": [
+        {
+          "text": "Terminal-Bench 4.0 is 64.1% (Vals) vs Opus 5.5's 65.2%, at half the token price.",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "text": "GDPval-AA Elo is 1838, ahead of Fable 5.2 (1831).",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "text": "AA-Briefcase is 1813, ahead of Opus 5.5 (1800).",
+          "source": null
+        },
+        {
+          "text": "CodeRabbit's pick for per-PR review: about $0.47 a review, fewer nitpicks than earlier Sonnets.",
+          "source": "https://coderabbit.ai/blog/sonnet-5-5-model-review"
+        }
+      ],
+      "cons": [
+        {
+          "text": "Max effort is a trap: AA measured about 193K output tokens per index task, the highest it had measured.",
+          "source": "https://artificialanalysis.ai/articles/claude-sonnet-5-5"
+        },
+        {
+          "text": "At max it costs $10.02 per index task for a score of 55, below Opus 5.5's 59 for $10.04.",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "text": "At max, FrontierCode drops from 52.1% (xhigh) to 46.2% because it over-spawns review subagents. Use medium or high; go to Opus instead of above high.",
+          "source": null
+        },
+        {
+          "text": "Weaker than Opus on open-ended judgment, and sometimes pauses to ask whether to continue. Test headless loops.",
+          "source": null
+        }
+      ]
+    },
+    {
+      "id": "claude-haiku-5-5",
+      "family": "claude",
+      "name": "Claude Haiku 5.5",
+      "released": "2026-10",
+      "price_in": 0.1,
+      "price_out": 0.5,
+      "price_note": "5x above a 100K-token prompt",
+      "use_for": "Subagent work: search, triage, summaries, classification",
+      "summary": "The subagent model. Its output is meant to be checked by a parent agent.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "36.4%",
+          "run_by": "independent",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "GDPval-AA",
+          "value": "1629",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "bench": "AA Intelligence Index v5",
+          "value": "36 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "AA cost per index task",
+          "value": "$0.41 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        }
+      ],
+      "pros": [
+        {
+          "text": "$0.41 per AA index task.",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "text": "GDPval-AA 1629 beats GPT-6 Luna (1443) at the same list price.",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "text": "Says it does not know more readily than most models.",
+          "source": null
+        }
+      ],
+      "cons": [
+        {
+          "text": "Weak at agent coding (Terminal-Bench 4.0 36.4%).",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "text": "Price jumps 5x above a 100K-token prompt, and prompt caching does not avoid it.",
+          "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+        },
+        {
+          "text": "Keep it off unsupervised edits.",
+          "source": null
+        }
+      ]
+    },
+    {
+      "id": "gpt-6-astra",
+      "family": "codex",
+      "name": "GPT-6 Astra",
+      "released": "2026-09-03",
+      "price_in": 10,
+      "price_out": 50,
+      "use_for": "Code review of Claude's work; ambiguous, long-horizon, high-stakes work",
+      "summary": "OpenAI's most capable model, for ambiguous, long-horizon, high-stakes work.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "59.6%",
+          "run_by": "independent",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "GDPval-AA",
+          "value": "1587",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "bench": "AA Intelligence Index v5",
+          "value": "57 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "AA cost per index task",
+          "value": "$6.24 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "CodeRabbit bug coverage",
+          "value": "61.3% overall, 57.1% on cross-file bugs",
+          "run_by": "vendor",
+          "source": "https://coderabbit.ai/blog/gpt-6-astra-code-review-evaluation"
+        },
+        {
+          "bench": "FrontierSWE v2",
+          "value": "65.5%",
+          "run_by": "vendor",
+          "source": "https://www.datacamp.com/blog/gemini-4-argon"
+        }
+      ],
+      "pros": [
+        {
+          "text": "Strongest code reviewer with data behind it: CodeRabbit (a vendor eval) measured 61.3% bug coverage, and 57.1% on hard cross-file bugs.",
+          "source": "https://coderabbit.ai/blog/gpt-6-astra-code-review-evaluation"
+        },
+        {
+          "text": "#1 on Arena WebDev when it launched.",
+          "source": null
+        },
+        {
+          "text": "FrontierSWE v2 65.5% vs Opus 5.5's 62.3%.",
+          "source": "https://www.datacamp.com/blog/gemini-4-argon"
+        },
+        {
+          "text": "Costs $6.24 per AA index task, against $26.54 for Fable 5.2 at max.",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        }
+      ],
+      "cons": [
+        {
+          "text": "Over-engineers: a narrow fix can come back as a sprawling diff unless told to be minimal (Kilo).",
+          "source": "https://blog.kilo.ai/p/gpt-6-astra-what-we-learned-previewing"
+        },
+        {
+          "text": "Runaway runs are reported: one 35-hour run burned about 1B tokens for nothing usable (Ronacher).",
+          "source": "https://lucumr.pocoo.org/2026/9/7/astra-why/"
+        },
+        {
+          "text": "Uses far more quota than Sol: OpenAI's Plus estimates are 5-45 local messages per 5 hours against 15-160 for Sol.",
+          "source": "https://learn.chatgpt.com/docs/pricing"
+        },
+        {
+          "text": "Safety classifiers can halt legitimate work mid-task.",
+          "source": "https://blog.kilo.ai/p/gpt-6-astra-what-we-learned-previewing"
+        },
+        {
+          "text": "Mid-September quality dips were traced to OpenAI config bugs and fixed 12 Sep.",
+          "source": null
+        }
+      ]
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "family": "codex",
+      "name": "GPT-6.1 Sol",
+      "released": "2026-09-29",
+      "price_in": 2,
+      "price_out": 10,
+      "use_for": "Everyday features, fixes and tests; the cheapest strong model per task",
+      "summary": "OpenAI's near-Astra model at a fifth of the price, and the recommended Codex model for long-running work.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "55.1%",
+          "run_by": "independent",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "GDPval-AA",
+          "value": "1607",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "bench": "AA Intelligence Index v5",
+          "value": "55 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "AA cost per index task",
+          "value": "$1.27 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        }
+      ],
+      "pros": [
+        {
+          "text": "AA index 55 for $1.27 a task, the best quality per dollar near the top.",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "text": "DeepSWE 75.2% at high for $0.65 vs Astra 74.1% for $4.43 (OpenAI-run).",
+          "source": null
+        },
+        {
+          "text": "Follows precise specs well and writes compact, fast code.",
+          "source": null
+        }
+      ],
+      "cons": [
+        {
+          "text": "Does the minimum: in one small test it shipped clean but bare web designs, and it does not fill obvious gaps in a prompt. Practitioners see it weaken on reasoning chains over about 8 steps and on novel patterns.",
+          "source": null
+        },
+        {
+          "text": "Terminal-Bench 4.0 55.1% vs Sonnet 5.5's 64.1% at the same list price.",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "text": "Higher reward hacking than Astra (coding-deception 1.50% vs 0.51%).",
+          "source": null
+        },
+        {
+          "text": "Codex caps context at 500K by default.",
+          "source": null
+        }
+      ]
+    },
+    {
+      "id": "gpt-6.1-terra",
+      "family": "codex",
+      "name": "GPT-6.1 Terra",
+      "released": "2026-10-26",
+      "price_in": 1,
+      "price_out": 5,
+      "use_for": "Screens, UI checks, computer use, clear writing from supplied material, scoped code fixes",
+      "summary": "Fast, efficient, built for visual reasoning, computer use, clear writing and scoped code fixes.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "49.5%",
+          "run_by": "independent",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "GDPval-AA",
+          "value": "1476",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "bench": "AA Intelligence Index v5",
+          "value": "51 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "AA cost per index task",
+          "value": "$0.96 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        }
+      ],
+      "pros": [
+        {
+          "text": "$0.96 per AA index task for a score of 51.",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "text": "Lowest hallucination rate in the GPT-6 family (34.5% vs Sol 51.9%).",
+          "source": null
+        },
+        {
+          "text": "OpenAI says it is more than 3x faster than Astra and Sol on computer use.",
+          "source": null
+        },
+        {
+          "text": "OpenAI's pick for clear writing from supplied material and computer-use tasks with a defined outcome.",
+          "source": "https://learn.chatgpt.com/docs/models"
+        }
+      ],
+      "cons": [
+        {
+          "text": "Trails Sol on coding (AA Coding Agent Index 48 vs 54).",
+          "source": "https://artificialanalysis.ai/articles/gpt-6-1-terra-pushes-the-cost-efficiency-frontier"
+        },
+        {
+          "text": "Claude still leads its home turf: OSWorld 2.1 Sonnet 5.5 80.1% vs Terra 74.2%. No hands-on practitioner reviews yet.",
+          "source": null
+        },
+        {
+          "text": "Not offered in the Codex IDE extension (desktop app and CLI only).",
+          "source": "https://learn.chatgpt.com/docs/models"
+        }
+      ]
+    },
+    {
+      "id": "gpt-6-luna",
+      "family": "codex",
+      "name": "GPT-6 Luna",
+      "released": "2026-09-22",
+      "price_in": 0.1,
+      "price_out": 0.5,
+      "use_for": "Bulk mechanical edits and extraction at high effort, on work a script or test can check",
+      "summary": "OpenAI's most efficient model, for focused high-volume work: extraction, classification, transformation.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "13.6%",
+          "run_by": "independent",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "GDPval-AA",
+          "value": "1443",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "bench": "AA Intelligence Index v5",
+          "value": "28 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "AA cost per index task",
+          "value": "$0.15 (max effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        }
+      ],
+      "pros": [
+        {
+          "text": "$0.15 per AA index task.",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        }
+      ],
+      "cons": [
+        {
+          "text": "Low effort is useless for agents (DeepSWE 2.4%).",
+          "source": null
+        },
+        {
+          "text": "Factual error rate is nearly double Astra's (7.6% vs 3.9%) and hallucination rate on AA-Omniscience is 79.3%. Keep it on tasks a script or a test can check.",
+          "source": null
+        }
+      ]
+    },
+    {
+      "id": "gemini-4-carbon",
+      "family": "gemini",
+      "name": "Gemini 4 Carbon",
+      "released": "2026-10-28",
+      "price_in": 2,
+      "price_out": 10,
+      "price_note": "rises to 4 / 20 from 1 Dec",
+      "use_for": "Google's top model; Ultra and Enterprise plans only in Antigravity",
+      "summary": "Google's top model on independent scoring. In Antigravity it is limited to Ultra and Enterprise plans.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "63.1%",
+          "run_by": "independent",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "GDPval-AA",
+          "value": "1733",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "bench": "AA Intelligence Index v5",
+          "value": "60 (high effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "AA cost per index task",
+          "value": "$5.48 (high effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        }
+      ],
+      "pros": [
+        {
+          "text": "AA Intelligence Index 60 at high effort, the highest Gemini score.",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "text": "#1 on LMArena text (1528), Gray Swan injection success 0%, GraphWalks 96.2%.",
+          "source": null
+        }
+      ],
+      "cons": [
+        {
+          "text": "In Antigravity it is Ultra and Enterprise only, so it is out of reach on a Pro plan.",
+          "source": "https://antigravity.google/docs/models"
+        },
+        {
+          "text": "Every's review: it can keep working for hours with little supervision, but its judgment lags its coding.",
+          "source": "https://every.to/vibe-check/vibe-check-gemini-4-carbon-doesn-t-know-when-to-stop"
+        }
+      ]
+    },
+    {
+      "id": "gemini-4-argon",
+      "family": "gemini",
+      "name": "Gemini 4 Argon",
+      "released": "2026-09-30",
+      "price_in": 2,
+      "price_out": 10,
+      "price_note": "rises to 4 / 20 from 1 Dec",
+      "use_for": "Whole-repo reads over 300K tokens; very long single outputs; read-only questions",
+      "summary": "Google positions it for long, complex work. Its context window is 1M tokens, shared with output, which can run to 1M through long decode.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "57.6%",
+          "run_by": "independent",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "GDPval-AA",
+          "value": "1634",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "bench": "AA Intelligence Index v5",
+          "value": "50 (high effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "AA cost per index task",
+          "value": "$4.97 (high effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "GraphWalks 256K-1M",
+          "value": "84.2% vs Astra 71.8% and Opus 5.5 66.8%",
+          "run_by": "vendor",
+          "source": "https://www.datacamp.com/blog/gemini-4-argon"
+        },
+        {
+          "bench": "LVBench",
+          "value": "91.7% vs Opus 5.5 83.7%",
+          "run_by": "vendor",
+          "source": "https://www.datacamp.com/blog/gemini-4-argon"
+        },
+        {
+          "bench": "FrontierSWE v2",
+          "value": "55.0%",
+          "run_by": "vendor",
+          "source": "https://www.datacamp.com/blog/gemini-4-argon"
+        }
+      ],
+      "pros": [
+        {
+          "text": "Best long-context reader with data behind it: GraphWalks 256K-1M 84.2% vs Astra 71.8% and Opus 5.5 66.8% (Google-run).",
+          "source": "https://www.datacamp.com/blog/gemini-4-argon"
+        },
+        {
+          "text": "Video understanding: LVBench 91.7% vs Opus 5.5's 83.7% (Google-run).",
+          "source": "https://www.datacamp.com/blog/gemini-4-argon"
+        },
+        {
+          "text": "#1 on AutomationBench-AA (78%) for business workflows. Prompt-injection success 0.7%.",
+          "source": null
+        },
+        {
+          "text": "Abstains rather than guesses on knowledge questions: AA measured a 15% hallucination rate vs 51% for Astra, though accuracy is lower too (50% vs 63%).",
+          "source": null
+        }
+      ],
+      "cons": [
+        {
+          "text": "Weaker at terminal and agent coding: Terminal-Bench 4.0 is 57.6% (Vals) vs Claude's 65.2%.",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "text": "FrontierSWE v2 is 55.0% vs Opus 5.5's 62.3% (Google-run).",
+          "source": "https://www.datacamp.com/blog/gemini-4-argon"
+        },
+        {
+          "text": "Fabricates on real codebases: one blind architecture audit found 47 of 92 claims made up, vs 2 of 42 for Opus 5.5 (one codebase, secondary write-up). Users report invented names and dates in drafted email. Have Claude or Codex verify anything it asserts about code.",
+          "source": null
+        },
+        {
+          "text": "Slow: about 29 minutes per AA index task at high effort, at 60-66 tokens per second.",
+          "source": "https://artificialanalysis.ai/models/gemini-4-argon"
+        },
+        {
+          "text": "Wordy: about 62K output tokens per AA task vs 27K for Astra.",
+          "source": null
+        }
+      ]
+    },
+    {
+      "id": "gemini-4-hydrogen",
+      "family": "gemini",
+      "name": "Gemini 4 Hydrogen",
+      "released": "2026-11-12",
+      "price_in": 1.5,
+      "price_out": 7.5,
+      "price_note": "third-party figure",
+      "use_for": "Cheap read-only search, triage and summaries on Google quota",
+      "summary": "The new Flash tier; it replaces 3.8 Flash. Google dropped the Flash name.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "54.0%",
+          "run_by": "independent",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "AA Intelligence Index v5",
+          "value": "54 (xhigh effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "AA cost per index task",
+          "value": "$3.16 (xhigh effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        }
+      ],
+      "pros": [
+        {
+          "text": "AA index 54 at xhigh for $3.16 a task, close to Sol.",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "text": "Terminal-Bench 4.0 54.0% (Vals) vs 19.7% for 3.8 Flash.",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "text": "Available on every Antigravity plan.",
+          "source": "https://antigravity.google/docs/models"
+        },
+        {
+          "text": "Takes about 14.7 minutes per AA index task at xhigh.",
+          "source": null
+        }
+      ],
+      "cons": [
+        {
+          "text": "Released 12 Nov 2026, with no practitioner reports yet. Google reports more refusals of safe requests, and xhigh can loop on its reasoning.",
+          "source": null
+        }
+      ]
+    },
+    {
+      "id": "gemini-3.8-flash",
+      "family": "gemini",
+      "name": "Gemini 3.8 Flash",
+      "released": "2026-09-02",
+      "price_in": 0.75,
+      "price_out": 3.75,
+      "price_note": "until 31 Dec 2026",
+      "use_for": "Skip it; Gemini 4 Hydrogen replaces it",
+      "summary": "Superseded by Gemini 4 Hydrogen.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "19.7%",
+          "run_by": "independent",
+          "source": "https://www.vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "GDPval-AA",
+          "value": "1442",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/evaluations/gdpval-aa"
+        },
+        {
+          "bench": "AA Intelligence Index v5",
+          "value": "31 (high effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "bench": "AA cost per index task",
+          "value": "$7.77 (high effort)",
+          "run_by": "independent",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        }
+      ],
+      "pros": [],
+      "cons": [
+        {
+          "text": "AA index 31 for $7.77 a task, worse value than Haiku 5.5.",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        },
+        {
+          "text": "Pro users on Google's forum report infinite retry loops, rereading files and quota drain.",
+          "source": null
+        }
+      ]
+    }
+  ],
+  "best_at_note": "Claude wins most coding and knowledge-work categories. Gemini wins long context, automation and injection resistance. OpenAI wins cost per task and cross-file review. Confidence is low wherever only the vendor ran the test.",
+  "best_at": [
+    {
+      "work": "Hard multi-file coding, refactors",
+      "best": "Fable 5.2",
+      "runner_up": "Opus 5.5",
+      "evidence": "Tops Scale SWE Atlas refactoring (80%) and FrontierCode 2.0 (49%)",
+      "confidence": "Medium-high",
+      "sources": [
+        "https://www.anthropic.com/claude-fable-and-mythos-5-2"
+      ]
+    },
+    {
+      "work": "Long unattended runs",
+      "best": "Fable 5.2",
+      "runner_up": "GPT-6 Astra",
+      "evidence": "Remote Labor Index 41.3% vs about 21% for Opus and Astra",
+      "confidence": "Medium",
+      "sources": [
+        "https://www.anthropic.com/claude-fable-and-mythos-5-2"
+      ]
+    },
+    {
+      "work": "Terminal, devops",
+      "best": "Opus 5.5 / Fable 5.2 (tie)",
+      "runner_up": "Sonnet 5.5",
+      "evidence": "Vals Terminal-Bench 4.0: 65.2%, 65.2%, 64.1%; next best Carbon 63.1%",
+      "confidence": "High for Claude as a family",
+      "sources": [
+        "https://www.vals.ai/benchmarks/terminal-bench-4"
+      ]
+    },
+    {
+      "work": "Code review",
+      "best": "GPT-6 Astra",
+      "runner_up": "Opus 5.5",
+      "evidence": "CodeRabbit: Astra 61.3% bug coverage; Opus 10/13 hard bugs at max. Different test sets",
+      "confidence": "Low-medium",
+      "sources": [
+        "https://coderabbit.ai/blog/gpt-6-astra-code-review-evaluation",
+        "https://www.coderabbit.ai/blog/opus-5-5-model-review"
+      ]
+    },
+    {
+      "work": "Frontend, UI taste",
+      "best": "Opus 5.5",
+      "runner_up": "Sonnet 5.5, Astra",
+      "evidence": "WebDev Arena: Opus 1810, Astra 1773, Sonnet 1770",
+      "confidence": "Medium",
+      "sources": []
+    },
+    {
+      "work": "Computer use, GUI",
+      "best": "Fable 5.2",
+      "runner_up": "Opus 5.5",
+      "evidence": "OSWorld 2.1: 89.3%, 87.2%; Astra 79.5% (Anthropic-run)",
+      "confidence": "Low",
+      "sources": [
+        "https://www.anthropic.com/claude-fable-and-mythos-5-2"
+      ]
+    },
+    {
+      "work": "Long-context reading",
+      "best": "Gemini 4 Argon",
+      "runner_up": "GPT-6 Astra",
+      "evidence": "GraphWalks 256K-1M: 84.2% vs 71.8% (Google-run)",
+      "confidence": "Medium",
+      "sources": [
+        "https://www.datacamp.com/blog/gemini-4-argon"
+      ]
+    },
+    {
+      "work": "Very long output",
+      "best": "Gemini 4 Argon",
+      "runner_up": "None",
+      "evidence": "Up to 1M output tokens vs 128K elsewhere",
+      "confidence": "Spec",
+      "sources": [
+        "https://www.datacamp.com/blog/gemini-4-argon",
+        "https://platform.claude.com/docs/en/about-claude/models/overview"
+      ]
+    },
+    {
+      "work": "Web research",
+      "best": "Fable 5.2",
+      "runner_up": "Argon",
+      "evidence": "WANDR: Fable 0.851, Argon 0.802, Astra 0.735 (Carbon 0.857, not on Pro)",
+      "confidence": "Low-medium",
+      "sources": []
+    },
+    {
+      "work": "Factual accuracy",
+      "best": "Fable 5.2",
+      "runner_up": "Argon (abstains most)",
+      "evidence": "AA-Omniscience: Fable accuracy 79%; Argon hallucination rate 15%",
+      "confidence": "Medium",
+      "sources": []
+    },
+    {
+      "work": "Knowledge work: docs, sheets, slides",
+      "best": "Opus 5.5",
+      "runner_up": "Sonnet 5.5",
+      "evidence": "GDPval-AA 1866, 1838; AA-Briefcase Sonnet 1813, Opus 1800",
+      "confidence": "Medium-high",
+      "sources": [
+        "https://artificialanalysis.ai/evaluations/gdpval-aa"
+      ]
+    },
+    {
+      "work": "Business automation",
+      "best": "Gemini 4 Argon",
+      "runner_up": "Fable 5.2",
+      "evidence": "AutomationBench-AA: Argon 78%, Fable 76%, Opus 70%",
+      "confidence": "Medium",
+      "sources": []
+    },
+    {
+      "work": "Writing quality",
+      "best": "Opus 5.5 / Argon (contested)",
+      "runner_up": "Fable 5.2",
+      "evidence": "Argon leads Arena creative writing; Every finds Opus prose most readable",
+      "confidence": "Low",
+      "sources": [
+        "https://every.to/vibe-check/vibe-check-opus-5-5-is-pulling-our-codex-converts-back-to-claude"
+      ]
+    },
+    {
+      "work": "Math, science reasoning",
+      "best": "Fable 5.2",
+      "runner_up": "GPT-6 Astra",
+      "evidence": "AA: HLE-Diamond 80%, CritPt 77%",
+      "confidence": "High",
+      "sources": []
+    },
+    {
+      "work": "Screens and visual tasks at low cost",
+      "best": "GPT-6.1 Terra",
+      "runner_up": "Hydrogen",
+      "evidence": "OpenAI's stated use; $0.96 per AA task",
+      "confidence": "Medium",
+      "sources": [
+        "https://learn.chatgpt.com/docs/models",
+        "https://artificialanalysis.ai/leaderboards/models"
+      ]
+    },
+    {
+      "work": "Cheap bulk work",
+      "best": "Haiku 5.5",
+      "runner_up": "GPT-6 Luna",
+      "evidence": "Same list price; Vals Index 58.7% vs 52.3%",
+      "confidence": "Medium",
+      "sources": []
+    },
+    {
+      "work": "Untrusted input (prompt injection)",
+      "best": "Argon",
+      "runner_up": "Opus 5.5",
+      "evidence": "Gray Swan, 15 tries: 0.7%, 0.96%; Astra 8.5%, Fable 4.09%",
+      "confidence": "Low",
+      "sources": []
+    }
+  ],
+  "personalities_note": "Each family fails in its own way, which is why reviews across families catch more. The evidence that they do is thin but consistent.",
+  "families": [
+    {
+      "id": "claude",
+      "summary": "Claude is the strongest family for coding judgment and knowledge work. Its weaknesses are token burn, slowness to the first token, and Fable's weaker defence against prompt injection. All four models have a 1M context, 128K max output and effort levels low to max. Claude Code defaults to medium effort.",
+      "plans_note": "All Claude models draw on one weekly allowance; Fable has its own cap inside it, not extra capacity. Subagents inherit the main session's model unless their definition sets one.",
+      "tends_to": "Be thorough, self-check, clean up and delete code, write well",
+      "watch_for": "Running for hours, spawning many subagents, high token burn, burying the point",
+      "brief_with": "A time or token budget and an explicit stop condition"
+    },
+    {
+      "id": "codex",
+      "summary": "OpenAI's line-up is the best value per task. Astra is a top-tier reviewer and long-run engine, Sol is the cheap strong daily driver, Terra does screens and prose, Luna does volume. The weak spots are frontend taste and over-literal prompts on the cheaper tiers. Spark retired on 14 Sep, and gpt-6-sol still runs but gpt-6.1-sol is the current recommendation.",
+      "plans_note": "Codex and ChatGPT Work share one usage allowance, so switching to a cheaper model does not refill it. OpenAI publishes Plus estimates per 5 hours: Astra 5-45, Sol 15-160, Terra 35-285, Luna 350-3,000 local messages. Pin models explicitly.",
+      "tends_to": "Lead with the answer, follow the spec literally, stay compact (Sol); push hard on long runs (Astra)",
+      "watch_for": "Doing the bare minimum (Sol); sprawling diffs and runaway runs (Astra); ignoring AGENTS.md under pressure",
+      "brief_with": "A complete spec, acceptance tests, and a minimal-diff instruction for Astra"
+    },
+    {
+      "id": "gemini",
+      "summary": "Gemini is the long-context and multimodal family, with strong prompt-injection resistance. The weak spots are terminal and agentic coding, slow and verbose output, and unreliable factual claims about code. The surrounding tooling (Antigravity quotas, headless mode, sandbox) is a bigger risk than the models themselves.",
+      "plans_note": "In Antigravity, Gemini models and Claude/GPT models draw on separate usage meters, each with a weekly and a five-hour limit. Carbon needs Ultra or Enterprise, Argon needs a paid Pro plan or better, Hydrogen and 3.8 Flash are on every plan. Claude Sonnet 5.5 and Opus 5.5 are on Pro for non-trial subscribers.",
+      "tends_to": "Be ambitious, expand scope, read everything",
+      "watch_for": "Fabricated specifics, verbose output, judgment lagging coding; forum reports describe the agent leaving its project, so sandbox it",
+      "brief_with": "For reading and research, narrow questions, with every claim about code checked by another family; builds go through the Gemini build script and get reviewed like any other build"
+    }
+  ],
+  "reading_notes": [
+    {
+      "text": "Trust the independent runs (Artificial Analysis, Vals, Scale, LMArena) over launch tables. Within the top cluster, a gap of 2-3 points is noise.",
+      "source": null
+    },
+    {
+      "text": "Vendor runs are flattering. Anthropic's own Terminal-Bench 4.0 run gave Sonnet 5.5 70.6% and Opus 5.5 66.4%. Independent harnesses give 63.6-64.1% and 59.6-65.2%. Google's claim that Argon trails Opus by 9 points shrinks to about 3 on AA's numbers.",
+      "source": null
+    },
+    {
+      "text": "Effort settings change everything. Opus 5.5 scores 35 on the AA index at low effort and 59 at max, for $0.98 vs $10.04 a task. Vendor tables often compare one model at xhigh with another at medium.",
+      "source": null
+    },
+    {
+      "text": "Index versions do not mix. AA moved to v5 on 27 Oct. Argon went from 53 to 50 and Gemini 3.8 Flash from 59 to 31 on the rebase. Discard any score dated before then.",
+      "source": null
+    },
+    {
+      "text": "Fable's scores include its fallback. AA ran Fable 5.2 with safeguards on, so cyber and bio prompts were answered by Opus 4.8 or Opus 5. Its security numbers describe the routed system, not the model alone.",
+      "source": null
+    },
+    {
+      "text": "Some boards are saturated or stale. SWE-bench Pro V2 Hard tops out near 98% with mixed harnesses. METR has published no time horizons for any of these models. Fable 5.2 and Hydrogen have no Arena rating yet.",
+      "source": null
+    },
+    {
+      "text": "Open conflicts: whether Carbon went to all paying API customers on 10 Nov (Antigravity still says Ultra only); Hydrogen's output limit (65K per segment vs 1M); and whether Codex Pro has a 5-hour window.",
+      "source": null
+    },
+    {
+      "text": "On cross-family review, the only quantified study is Greptile's (a vendor, older Opus 4.7 vs GPT 5.5 models). Each family's reviewer scored about 2-3 points higher on P0/P1 bugs when reviewing the other family's pull requests. There were no significance tests and only two families. It supports reviewing across families but does not prove it.",
+      "source": "https://www.greptile.com/blog/model-inversion"
+    }
+  ]
+}

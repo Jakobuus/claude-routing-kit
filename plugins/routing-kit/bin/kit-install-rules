@@ -1,0 +1,515 @@
+#!/bin/bash
+# kit-install-rules --agent codex|gemini [--home DIR] [--uninstall] [--print]
+#
+# Makes routing-kit's rules load in Codex or Antigravity (Gemini) at the start of
+# every session:
+#   (a) merges one SessionStart hook entry into the agent's hooks file with jq,
+#       keeping every other entry (and everything else in the file);
+#   (b) writes a short pointer block between <!-- routing-kit:start --> and
+#       <!-- routing-kit:end --> into the global instructions file the agent loads.
+# It edits other programs' config files, so it never loses content:
+#   - everything is checked first (JSON shape, marker order, symlinks, write
+#     permission); if anything is wrong it says so in one line and changes nothing;
+#   - two phases: first every new file is built and verified as a temp file next
+#     to its target and the current bytes are saved; only then are the temp files
+#     moved into place, one by one, and a failed move puts the earlier ones back;
+#   - each existing file is backed up once to <file>.routing-kit.bak;
+#   - --uninstall removes only our entry and block, puts the original bytes back
+#     when nothing else changed since, does nothing at all when we were never
+#     installed, and deletes a file only if the install created it and it holds
+#     nothing else (the install records the files it created in
+#     $KIT_HOME/install-created.txt);
+#   - a hook entry is ours only if its command is exactly the one being installed
+#     or exactly one recorded earlier in $KIT_HOME/install-commands.txt (a kit that
+#     moved); a command that merely mentions our path is never touched.
+#
+# Where things live (--home overrides the agent's config folder):
+#   codex:  $CODEX_HOME or ~/.codex   hooks.json, AGENTS.override.md (if it exists
+#           and is not empty) else AGENTS.md
+#   gemini: ~/.gemini                 config/hooks.json, AGENTS.md
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$SCRIPT_DIR/kit-common"
+kit_require_supported
+kit_require_jq
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
+
+USAGE="usage: kit-install-rules --agent codex|gemini [--home DIR] [--uninstall] [--print]"
+AGENT=""; HOME_OVERRIDE=""; UNINSTALL=0; PRINT=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --agent) [ $# -ge 2 ] || kit_die 2 "$USAGE"; AGENT="$2"; shift 2 ;;
+    --home) [ $# -ge 2 ] || kit_die 2 "$USAGE"; HOME_OVERRIDE="$2"; shift 2 ;;
+    --uninstall) UNINSTALL=1; shift ;;
+    --print) PRINT=1; shift ;;
+    *) kit_die 2 "$USAGE" ;;
+  esac
+done
+case "$AGENT" in codex|gemini) ;; *) kit_die 2 "$USAGE" ;; esac
+
+START='<!-- routing-kit:start -->'
+END='<!-- routing-kit:end -->'
+BAK=".routing-kit.bak"
+CREATED_LIST="$KIT_HOME/install-created.txt"
+COMMANDS_LIST="$KIT_HOME/install-commands.txt"
+
+if [ "$AGENT" = codex ]; then
+  HOOK_PATH="$PLUGIN_ROOT/hooks/session-start"
+  CONF="${HOME_OVERRIDE:-${CODEX_HOME:-$HOME/.codex}}"
+  HOOKS_FILE="$CONF/hooks.json"
+  if [ -s "$CONF/AGENTS.override.md" ]; then INSTR_FILE="$CONF/AGENTS.override.md"; else INSTR_FILE="$CONF/AGENTS.md"; fi
+  # Uninstall cleans both candidates: the override file may have appeared or
+  # vanished since the install. Checks cover both in every mode.
+  INSTR_ALL="$CONF/AGENTS.override.md
+$CONF/AGENTS.md"
+else
+  HOOK_PATH="$PLUGIN_ROOT/hooks/session-start-agy"
+  CONF="${HOME_OVERRIDE:-$HOME/.gemini}"
+  HOOKS_FILE="$CONF/config/hooks.json"
+  INSTR_FILE="$CONF/AGENTS.md"
+  INSTR_ALL="$INSTR_FILE"
+fi
+HOOK_CMD=$(kit_shell_quote "$HOOK_PATH")
+SESSION_CMD=$(kit_shell_quote "$PLUGIN_ROOT/hooks/session-start")
+[ -x "$HOOK_PATH" ] || kit_die 2 "hook not found or not executable: $HOOK_PATH"
+
+BLOCK="$START
+routing-kit is installed and loads its rules at session start. If this session shows no routing-kit rules, run \`$SESSION_CMD\` and follow its output.
+$END"
+
+# --- hooks.json programs -------------------------------------------------------
+# "ours": a handler whose command is ours, quoted or not, at any kit location.
+if [ "$AGENT" = codex ]; then
+  OURS='def ours: ((.command // "") | (. == $cmd or (. as $c | any($old[]; . == $c))));'
+  JQ_SHAPE='type == "object"
+    and (((.hooks | type) == "null") or ((.hooks | type) == "object"))
+    and (((.hooks.SessionStart | type) == "null") or ((.hooks.SessionStart | type) == "array"))
+    and all(.hooks.SessionStart[]?; (type == "object") and (((.hooks | type) == "null") or ((.hooks | type) == "array")))
+    and all(.hooks.SessionStart[]?.hooks[]?; type == "object")'
+  JQ_HAS='any(.hooks.SessionStart[]?.hooks[]?; ours)'
+  JQ_INSTALL='(.hooks //= {})
+    | .hooks.SessionStart = (
+        ((.hooks.SessionStart // [])
+          | map(if any(.hooks[]?; ours) then .hooks |= map(select(ours | not)) else . end)
+          | map(select(((.hooks // [1]) | length) > 0)))
+        + [{"hooks":[{"type":"command","command":$cmd}]}])'
+  JQ_REMOVE='.hooks.SessionStart |= (map(if any(.hooks[]?; ours) then .hooks |= map(select(ours | not)) else . end)
+                                      | map(select(((.hooks // [1]) | length) > 0)))
+    | if .hooks.SessionStart == [] then del(.hooks.SessionStart) else . end
+    | if .hooks == {} then del(.hooks) else . end'
+else
+  OURS='def ours: ((.command // "") | (. == $cmd or (. as $c | any($old[]; . == $c))));'
+  JQ_SHAPE='type == "object"
+    and (((.["routing-kit"] | type) == "null") or ((.["routing-kit"] | type) == "object"))
+    and (((.["routing-kit"].SessionStart | type) == "null") or ((.["routing-kit"].SessionStart | type) == "array"))
+    and all(.["routing-kit"].SessionStart[]?; type == "object")'
+  JQ_HAS='any(.["routing-kit"].SessionStart[]?; ours)'
+  JQ_INSTALL='.["routing-kit"] = ((.["routing-kit"] // {})
+    | .SessionStart = (((.SessionStart // []) | map(select(ours | not)))
+                       + [{"type":"command","command":$cmd,"timeout":30}]))'
+  JQ_REMOVE='.["routing-kit"].SessionStart |= map(select(ours | not))
+    | if .["routing-kit"].SessionStart == [] then del(.["routing-kit"].SessionStart) else . end
+    | if .["routing-kit"] == {} then del(.["routing-kit"]) else . end'
+fi
+# Commands this agent's entry had when earlier installs ran (a moved kit).
+OLD_CMDS_JSON='[]'
+if [ -f "$COMMANDS_LIST" ] && [ ! -L "$COMMANDS_LIST" ]; then
+  OLD_CMDS_JSON=$(kit_jq -R -s -c --arg a "$AGENT" 'split("\n") | map(select(startswith($a + "\t")) | sub("^[^\t]*\t"; ""))' "$COMMANDS_LIST" 2>/dev/null) || OLD_CMDS_JSON='[]'
+fi
+jqrun() { # PROGRAM [jq opts]: stdin JSON
+  prog="$1"; shift
+  kit_jq "$@" --arg cmd "$HOOK_CMD" --argjson old "$OLD_CMDS_JSON" "$OURS $prog"
+}
+json_install() { jqrun "$JQ_INSTALL"; }
+json_remove() { jqrun "$JQ_REMOVE"; }
+json_has() { jqrun "$JQ_HAS" -e >/dev/null 2>&1; }
+json_shape_ok() { jqrun "$JQ_SHAPE" -e >/dev/null 2>&1; }
+json_current() { if [ -s "$1" ]; then cat "$1"; else echo '{}'; fi; }
+same_json() { [ "$(printf '%s' "$1" | kit_jq -S -c .)" = "$(printf '%s' "$2" | kit_jq -S -c .)" ]; }
+
+# --- instruction file helpers --------------------------------------------------
+# md_state FILE: ok (no block), ok (one well-formed block) or bad.
+# Exactly one start and one end line, each on a line of its own, start first.
+md_has_block() { [ -f "$1" ] && grep -q -x -F -- "$START" "$1"; }
+md_ok() {
+  [ -f "$1" ] || return 0
+  s_any=$(grep -c -F -- "$START" "$1"); e_any=$(grep -c -F -- "$END" "$1")
+  s_own=$(grep -c -x -F -- "$START" "$1"); e_own=$(grep -c -x -F -- "$END" "$1")
+  [ "$s_any" = "$s_own" ] && [ "$e_any" = "$e_own" ] && [ "$s_own" = "$e_own" ] && [ "$s_own" -le 1 ] || return 1
+  [ "$s_own" -eq 0 ] && return 0
+  sl=$(grep -n -x -F -- "$START" "$1" | cut -d: -f1); el=$(grep -n -x -F -- "$END" "$1" | cut -d: -f1)
+  [ "$sl" -lt "$el" ]
+}
+# md_strip FILE: the file without the block and the blank line before it.
+md_strip() {
+  [ -f "$1" ] || return 0
+  awk -v s="$START" -v e="$END" '
+    skip { if ($0 == e) skip = 0; next }
+    $0 == s { if (n > 0 && lines[n] == "") n--; skip = 1; next }
+    { lines[++n] = $0 }
+    END { for (i = 1; i <= n; i++) print lines[i] }' "$1"
+}
+# md_install FILE: stripped content + blank line + block.
+md_install() {
+  stripped=$(md_strip "$1"; echo x); stripped=${stripped%x}
+  if [ -n "$stripped" ]; then
+    printf '%s' "$stripped"
+    case "$stripped" in *$'\n') ;; *) printf '\n' ;; esac
+    printf '\n'
+  fi
+  printf '%s\n' "$BLOCK"
+}
+
+# --- --print ---------------------------------------------------------------------
+if [ "$PRINT" -eq 1 ]; then
+  echo "agent:        $AGENT"
+  echo "hooks file:   $HOOKS_FILE"
+  echo "hook command: $HOOK_CMD"
+  echo "hook entry:"
+  echo '{}' | json_install | kit_jq .
+  echo "instructions: $INSTR_FILE"
+  printf '%s\n' "$BLOCK"
+  exit 0
+fi
+
+# --- checks: nothing is changed until all of these pass ------------------------
+refuse() { kit_die 2 "$1 Nothing was changed."; }
+for f in "$HOOKS_FILE" "$HOOKS_FILE$BAK" "$CREATED_LIST" "$COMMANDS_LIST"; do
+  [ -L "$f" ] && refuse "$f is a symlink; refusing to use it."
+done
+printf '%s\n' "$INSTR_ALL" | while IFS= read -r f; do
+  if [ -L "$f" ] || [ -L "$f$BAK" ]; then exit 1; fi
+done || refuse "An instructions file is a symlink; refusing to edit it."
+if [ -e "$HOOKS_FILE" ]; then
+  [ -f "$HOOKS_FILE" ] || refuse "$HOOKS_FILE is not a regular file."
+  cur=$(json_current "$HOOKS_FILE")
+  printf '%s' "$cur" | kit_jq -e . >/dev/null 2>&1 || refuse "$HOOKS_FILE is not valid JSON."
+  printf '%s' "$cur" | json_shape_ok || refuse "$HOOKS_FILE does not have the shape $AGENT expects."
+else
+  cur='{}'
+fi
+printf '%s\n' "$INSTR_ALL" | while IFS= read -r f; do md_ok "$f" || exit 1; done \
+  || refuse "An instructions file has misplaced or duplicated routing-kit markers."
+
+# writable_or_refuse FILE: an existing file must be writable; a new one needs a
+# writable folder (the nearest one that exists).
+writable_or_refuse() {
+  if [ -e "$1" ]; then
+    [ -w "$1" ] || refuse "$1 is not writable."
+    [ -w "$(dirname "$1")" ] || refuse "$(dirname "$1") is not writable."
+  else
+    d=$(dirname "$1")
+    while [ ! -d "$d" ]; do d=$(dirname "$d"); done
+    [ -w "$d" ] || refuse "$d is not writable."
+  fi
+}
+
+# --- the plan: phase 1 builds it, phase 2 applies it ---------------------------
+# Parallel arrays, one slot per file to change. All state lives in this shell:
+# nothing below runs inside a pipeline or a $(...).
+P_TARGET=(); P_KIND=(); P_TMP=(); P_SNAP=(); P_POST=()
+NP=0
+TEMPS=(); NTEMPS=0
+MADE_DIRS=(); NDIRS=0
+MADE_BAKS=(); NBAKS=0
+KEEP_SNAP=0
+# Fault injection for the test suite (KIT_TEST_FAIL_APPLY, KIT_TEST_FAIL_RESTORE)
+# only works when the harness also sets KIT_TEST_MODE to this exact value, so a
+# stray variable in someone's environment never changes a real run.
+TEST_MODE=0; [ "${KIT_TEST_MODE:-}" = "routing-kit-tests" ] && TEST_MODE=1
+SNAPDIR=$(mktemp -d "${TMPDIR:-/tmp}/kit-install.XXXXXX") || kit_die 2 "cannot create a temp folder. Nothing was changed."
+cleanup() { [ "$KEEP_SNAP" -eq 1 ] || rm -rf "$SNAPDIR"; }
+trap cleanup EXIT
+
+# phase1_fail MSG: remove everything phase 1 made, say why, exit non-zero.
+phase1_fail() {
+  i=0; while [ "$i" -lt "$NTEMPS" ]; do rm -f "${TEMPS[$i]}"; i=$((i + 1)); done
+  i=0; while [ "$i" -lt "$NBAKS" ]; do rm -f "${MADE_BAKS[$i]}"; i=$((i + 1)); done
+  i=$NDIRS; while [ "$i" -gt 0 ]; do i=$((i - 1)); rmdir "${MADE_DIRS[$i]}" 2>/dev/null; done
+  kit_die 2 "$1 Nothing was changed."
+}
+
+# new_tmp TARGET: sets NEWTMP to a fresh temp file in TARGET's own folder, with
+# TARGET's mode when it exists.
+new_tmp() {
+  dir=$(dirname "$1")
+  if [ ! -d "$dir" ]; then
+    mkdir -p "$dir" || phase1_fail "Could not create $dir."
+    MADE_DIRS[$NDIRS]="$dir"; NDIRS=$((NDIRS + 1))
+  fi
+  NEWTMP=$(mktemp "$dir/.routing-kit.XXXXXX") || phase1_fail "Could not write next to $1."
+  TEMPS[$NTEMPS]="$NEWTMP"; NTEMPS=$((NTEMPS + 1))
+  if [ -f "$1" ]; then cp -p "$1" "$NEWTMP" || phase1_fail "Could not copy the mode of $1."; fi
+}
+
+# backup_once FILE (phase 1): the one-time copy to FILE.routing-kit.bak. It is
+# copied to a temp file next to it, compared, and only then moved to the .bak
+# name, so a copy that fails halfway never leaves a partial backup behind.
+backup_once() {
+  [ -f "$1" ] && [ ! -e "$1$BAK" ] || return 0
+  # A file this kit created is not the user's original: nothing to back up.
+  was_created "$1" && return 0
+  new_tmp "$1"
+  bak_tmp="$NEWTMP"
+  cmp -s "$1" "$bak_tmp" || phase1_fail "Could not back up $1."
+  mv "$bak_tmp" "$1$BAK" || phase1_fail "Could not back up $1."
+  MADE_BAKS[$NBAKS]="$1$BAK"; NBAKS=$((NBAKS + 1))
+}
+
+# snapshot_of TARGET: sets SNAPFILE to a per-file snapshot of its current bytes
+# ("" if it does not exist). The name comes from the path, never a counter.
+snapshot_of() {
+  SNAPFILE=""
+  [ -e "$1" ] || return 0
+  key=$(printf '%s' "$1" | cksum | cut -d' ' -f1)
+  SNAPFILE="$SNAPDIR/$key"
+  cp -p "$1" "$SNAPFILE" || phase1_fail "Could not save a copy of $1."
+}
+
+# add_write TARGET TMP POST: queue "move TMP over TARGET" (TMP is finished and verified).
+add_write() {
+  snapshot_of "$1"
+  P_TARGET[$NP]="$1"; P_KIND[$NP]=write; P_TMP[$NP]="$2"; P_SNAP[$NP]="$SNAPFILE"; P_POST[$NP]="$3"
+  NP=$((NP + 1))
+}
+add_delete() { # TARGET POST
+  snapshot_of "$1"
+  P_TARGET[$NP]="$1"; P_KIND[$NP]=delete; P_TMP[$NP]=""; P_SNAP[$NP]="$SNAPFILE"; P_POST[$NP]="$2"
+  NP=$((NP + 1))
+}
+
+# verify_json TMP WANT: TMP is a JSON object that does (WANT=has) or does not
+# (WANT=gone) hold our entry.
+verify_json() {
+  kit_jq -e 'type == "object"' "$1" >/dev/null 2>&1 || return 1
+  if kit_jq -e . "$1" >/dev/null 2>&1; then :; else return 1; fi
+  if json_has < "$1"; then [ "$2" = has ]; else [ "$2" = gone ]; fi
+}
+# verify_md TMP WANT: exactly one block (has) or none (gone), well formed.
+verify_md() {
+  md_ok "$1" || return 1
+  n=$(grep -c -x -F -- "$START" "$1")
+  if [ "$2" = has ]; then [ "$n" -eq 1 ] && [ -s "$1" ]; else [ "$n" -eq 0 ]; fi
+}
+
+# put_json TARGET JSON WANT POST: phase 1 for a hooks file written from a JSON value.
+put_json() {
+  pretty=$(printf '%s' "$2" | kit_jq .) || phase1_fail "Could not format the new $1."
+  new_tmp "$1"
+  printf '%s\n' "$pretty" > "$NEWTMP" || phase1_fail "Could not write next to $1."
+  verify_json "$NEWTMP" "$3" || phase1_fail "The new $1 did not pass its check."
+  add_write "$1" "$NEWTMP" "$4"
+}
+# put_md TARGET CONTENT-END-MARKED WANT POST: CONTENT ends with an extra x (kept
+# so trailing newlines survive command substitution).
+put_md() {
+  new_tmp "$1"
+  printf '%s' "${2%x}" > "$NEWTMP" || phase1_fail "Could not write next to $1."
+  verify_md "$NEWTMP" "$3" || phase1_fail "The new $1 did not pass its check."
+  add_write "$1" "$NEWTMP" "$4"
+}
+# put_copy TARGET SOURCE POST: TARGET becomes a byte copy of SOURCE (a backup).
+put_copy() {
+  new_tmp "$1"
+  cp "$2" "$NEWTMP" || phase1_fail "Could not copy $2."
+  add_write "$1" "$NEWTMP" "$3"
+}
+
+# restore_one I: put slot I back as it was before phase 2. Returns non-zero on failure.
+restore_one() {
+  t="${P_TARGET[$1]}"; sn="${P_SNAP[$1]}"
+  [ "$TEST_MODE" = 1 ] && [ "${KIT_TEST_FAIL_RESTORE:-}" = 1 ] && return 1
+  if [ -n "$sn" ]; then
+    rtmp=$(mktemp "$(dirname "$t")/.routing-kit.XXXXXX") || return 1
+    cp -p "$sn" "$rtmp" || { rm -f "$rtmp"; return 1; }
+    mv -f "$rtmp" "$t" || { rm -f "$rtmp"; return 1; }
+  else
+    rm -f "$t"
+  fi
+}
+
+# undo_and_die PREFIX COUNT: put slots COUNT-1..0 back as they were, clean up
+# every temp file, backup and folder of this run, and exit non-zero.
+undo_and_die() {
+  lost=""
+  j=$(($2 - 1))
+  while [ "$j" -ge 0 ]; do
+    if ! restore_one "$j"; then
+      KEEP_SNAP=1
+      lost="$lost ${P_TARGET[$j]} (original saved at ${P_SNAP[$j]:-nothing: it did not exist})"
+    fi
+    j=$((j - 1))
+  done
+  k=0; while [ "$k" -lt "$NTEMPS" ]; do rm -f "${TEMPS[$k]}"; k=$((k + 1)); done
+  k=0; while [ "$k" -lt "$NBAKS" ]; do [ -z "$lost" ] && rm -f "${MADE_BAKS[$k]}"; k=$((k + 1)); done
+  k=$NDIRS; while [ "$k" -gt 0 ]; do k=$((k - 1)); rmdir "${MADE_DIRS[$k]}" 2>/dev/null; done
+  if [ -n "$lost" ]; then
+    kit_die 2 "$1, and could not put back:$lost."
+  fi
+  kit_die 2 "$1. Everything was put back as it was."
+}
+
+# phase 2: move each file into place, checking every step; undo on failure.
+apply_plan() {
+  i=0
+  while [ "$i" -lt "$NP" ]; do
+    ok=1
+    if [ "$TEST_MODE" = 1 ] && [ "${KIT_TEST_FAIL_APPLY:-}" = "$((i + 1))" ]; then ok=0
+    elif [ "${P_KIND[$i]}" = write ]; then mv -f "${P_TMP[$i]}" "${P_TARGET[$i]}" || ok=0
+    else rm -f "${P_TARGET[$i]}" || ok=0
+    fi
+    [ "$ok" -eq 1 ] || undo_and_die "Could not write ${P_TARGET[$i]}" "$i"
+    i=$((i + 1))
+  done
+}
+
+# after a successful apply: bookkeeping. Returns non-zero if a record could not be
+# saved (the install then undoes itself).
+run_post() {
+  i=0
+  while [ "$i" -lt "$NP" ]; do
+    post="${P_POST[$i]}"
+    case "$post" in
+      rmbak) rm -f "${P_TARGET[$i]}$BAK" ;;
+      created) record_created "${P_TARGET[$i]}" || return 1 ;;
+      forget) forget_created "${P_TARGET[$i]}" ;;
+    esac
+    i=$((i + 1))
+  done
+  [ "$AGENT" = gemini ] && [ ! -e "$HOOKS_FILE" ] && rmdir "$CONF/config" 2>/dev/null
+  return 0
+}
+# Bookkeeping lives in the kit home. Each rewrite goes through a mktemp file in
+# the same folder and a mv; a symlinked bookkeeping file was refused up front.
+book_write() { # FILE ; new content on stdin
+  mkdir -p "$KIT_HOME" 2>/dev/null || return 1
+  bt=$(mktemp "$KIT_HOME/.routing-kit.XXXXXX") || return 1
+  if cat > "$bt"; then mv -f "$bt" "$1" || { rm -f "$bt"; return 1; }; else rm -f "$bt"; return 1; fi
+}
+book_lines() { [ -f "$1" ] && cat "$1"; return 0; } # current lines, nothing if absent
+record_created() { # FILE
+  grep -q -x -F -- "$1" "$CREATED_LIST" 2>/dev/null && return 0
+  { book_lines "$CREATED_LIST"; printf '%s\n' "$1"; } | book_write "$CREATED_LIST"
+}
+was_created() { [ -f "$CREATED_LIST" ] && grep -q -x -F -- "$1" "$CREATED_LIST"; }
+forget_created() {
+  [ -f "$CREATED_LIST" ] || return 0
+  rest=$(grep -v -x -F -- "$1" "$CREATED_LIST")
+  if [ -n "$rest" ]; then printf '%s\n' "$rest" | book_write "$CREATED_LIST"; else rm -f "$CREATED_LIST"; fi
+  return 0
+}
+record_command() { # the command just installed for this agent
+  [ "$TEST_MODE" = 1 ] && [ "${KIT_TEST_FAIL_RECORD:-}" = 1 ] && return 1
+  line="$AGENT	$HOOK_CMD"
+  grep -q -x -F -- "$line" "$COMMANDS_LIST" 2>/dev/null && return 0
+  { book_lines "$COMMANDS_LIST"; printf '%s\n' "$line"; } | book_write "$COMMANDS_LIST"
+}
+forget_commands() { # all recorded commands of this agent (after an uninstall)
+  [ -f "$COMMANDS_LIST" ] || return 0
+  rest=$(grep -v -F -- "$AGENT	" "$COMMANDS_LIST")
+  if [ -n "$rest" ]; then printf '%s\n' "$rest" | book_write "$COMMANDS_LIST"; else rm -f "$COMMANDS_LIST"; fi
+  return 0
+}
+
+# --- uninstall -----------------------------------------------------------------
+if [ "$UNINSTALL" -eq 1 ]; then
+  hooks_present=0
+  if [ -e "$HOOKS_FILE" ] && printf '%s' "$cur" | json_has; then hooks_present=1; fi
+  md_list=(); nmd=0
+  while IFS= read -r f; do
+    if md_has_block "$f"; then md_list[$nmd]="$f"; nmd=$((nmd + 1)); fi
+  done <<EOF
+$INSTR_ALL
+EOF
+  if [ "$hooks_present" -eq 0 ] && [ "$nmd" -eq 0 ]; then
+    echo "routing-kit rules were not installed for $AGENT; nothing changed."
+    exit 0
+  fi
+  [ ! -e "$COMMANDS_LIST" ] || writable_or_refuse "$COMMANDS_LIST"
+  [ ! -e "$CREATED_LIST" ] || writable_or_refuse "$CREATED_LIST"
+  [ "$hooks_present" -eq 0 ] || writable_or_refuse "$HOOKS_FILE"
+  i=0; while [ "$i" -lt "$nmd" ]; do writable_or_refuse "${md_list[$i]}"; i=$((i + 1)); done
+
+  # phase 1
+  if [ "$hooks_present" -eq 1 ]; then
+    if [ -f "$HOOKS_FILE$BAK" ] && same_json "$cur" "$(json_current "$HOOKS_FILE$BAK" | json_install)"; then
+      put_copy "$HOOKS_FILE" "$HOOKS_FILE$BAK" rmbak
+    else
+      new=$(printf '%s' "$cur" | json_remove) || phase1_fail "Could not edit $HOOKS_FILE."
+      if [ "$new" = "{}" ] && [ ! -e "$HOOKS_FILE$BAK" ] && was_created "$HOOKS_FILE"; then
+        add_delete "$HOOKS_FILE" forget
+      else
+        put_json "$HOOKS_FILE" "$new" gone ""
+      fi
+    fi
+  fi
+  i=0
+  while [ "$i" -lt "$nmd" ]; do
+    f="${md_list[$i]}"
+    if [ -f "$f$BAK" ] && [ "$(md_install "$f$BAK"; echo x)" = "$(cat "$f"; echo x)" ]; then
+      put_copy "$f" "$f$BAK" rmbak
+    else
+      rest=$(md_strip "$f"; echo x)
+      if [ -z "$(printf '%s' "${rest%x}" | tr -d ' \t\r\n')" ] && [ ! -e "$f$BAK" ] && was_created "$f"; then
+        add_delete "$f" forget
+      else
+        put_md "$f" "$rest" gone ""
+      fi
+    fi
+    i=$((i + 1))
+  done
+
+  # phase 2
+  apply_plan
+  run_post
+  forget_commands
+  echo "routing-kit rules removed from $AGENT ($HOOKS_FILE, $INSTR_FILE)."
+  exit 0
+fi
+
+# --- install -------------------------------------------------------------------
+writable_or_refuse "$HOOKS_FILE"
+writable_or_refuse "$INSTR_FILE"
+
+# The install record lives in the kit home: it must be writable (or creatable)
+# before anything is touched, or a later reinstall could not recognise this entry.
+writable_or_refuse "$COMMANDS_LIST"
+writable_or_refuse "$CREATED_LIST"
+
+# phase 1: nothing the user owns is touched.
+new=$(printf '%s' "$cur" | json_install) || phase1_fail "Could not edit $HOOKS_FILE."
+want=$(md_install "$INSTR_FILE"; echo x)
+hooks_new=0; [ -e "$HOOKS_FILE" ] || hooks_new=1
+instr_new=0; [ -e "$INSTR_FILE" ] || instr_new=1
+hooks_same=0; [ -f "$HOOKS_FILE" ] && same_json "$cur" "$new" && hooks_same=1
+instr_same=0; [ -f "$INSTR_FILE" ] && [ "$(cat "$INSTR_FILE"; echo x)" = "$want" ] && instr_same=1
+
+if [ "$hooks_same" -eq 0 ]; then
+  backup_once "$HOOKS_FILE"
+  post=""; [ "$hooks_new" -eq 1 ] && post=created
+  put_json "$HOOKS_FILE" "$new" has "$post"
+fi
+if [ "$instr_same" -eq 0 ]; then
+  backup_once "$INSTR_FILE"
+  post=""; [ "$instr_new" -eq 1 ] && post=created
+  put_md "$INSTR_FILE" "$want" has "$post"
+fi
+
+# phase 2
+apply_plan
+if ! { run_post && record_command; }; then
+  # the install could not be recorded: forget what was recorded, put the targets back
+  i=0
+  while [ "$i" -lt "$NP" ]; do
+    [ "${P_POST[$i]}" = created ] && forget_created "${P_TARGET[$i]}"
+    i=$((i + 1))
+  done
+  undo_and_die "Could not save the install record in $KIT_HOME" "$NP"
+fi
+
+echo "routing-kit rules installed for $AGENT: hook in $HOOKS_FILE, pointer in $INSTR_FILE."
+if [ "$AGENT" = codex ]; then
+  echo "Codex asks you to trust the hook once: open /hooks in Codex and approve routing-kit."
+fi
+exit 0

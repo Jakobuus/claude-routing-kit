@@ -1,0 +1,13 @@
+#!/bin/bash
+# kit-guide-validate FILE [DOMAINS_FILE] — checks a guide.json against the
+# text and source rules in lib/guide_schema.py. Exit 0 ok (null sources only
+# warn, on stderr), 1 with one "PATH: problem" line per violation, 2 usage.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$SCRIPT_DIR/kit-common"
+kit_require_supported
+kit_require_python3
+
+kit_python3 "$SCRIPT_DIR/../lib/guide_schema.py" "$@"
+exit $?

@@ -134,7 +134,7 @@ assert_contains "$out" "hello.txt" "diff shows the new file"
 assert_contains "$out" "run dir:" "run dir is printed"
 
 argv=$(cat "$argv_log")
-assert_contains "$argv" "-m gpt-6-sol" "fake codex received the default build model"
+assert_contains "$argv" "-m $(/usr/bin/jq -r .codex.build "$(dirname "$BIN")/../rules/models.json")" "fake codex received the default build model from models.json"
 assert_contains "$argv" "-s workspace-write" "fake codex received the sandbox flag"
 case "$argv" in
   *"--dangerously-bypass-approvals-and-sandbox"*)

@@ -87,6 +87,10 @@ warn() {
 lane_enabled() {
   [ -f "$PROFILE_JSON" ] || return 1
   case "$1" in
+    gemini)
+      v=$(kit_jq -r '.gemini // "none"' "$PROFILE_JSON" 2>/dev/null)
+      [ -n "$v" ] && [ "$v" != "none" ]
+      ;;
     codex)
       v=$(kit_jq -r '.codex // "none"' "$PROFILE_JSON" 2>/dev/null)
       [ -n "$v" ] && [ "$v" != "none" ]
@@ -145,7 +149,7 @@ case "$hook_out" in
     ok "routing table"
     ;;
   *)
-    bad "routing table" "session-start hook did not print a routing table; run kit-profile validate, then claude plugin update routing-kit@routing-kit" 2
+    bad "routing table" "session-start hook did not print a routing table; run kit-profile validate; then update: for the Claude plugin run claude plugin update routing-kit@routing-kit, for a clone run git -C ~/.config/routing-kit/kit pull and kit-install-rules --agent codex (or gemini), as START-HERE.md says" 2
     ;;
 esac
 
@@ -175,6 +179,32 @@ if lane_enabled codex; then
       else
         printf '%s\n' "$build_out"
         bad "codex" "build check failed (exit $build_code); run codex login if needed, then rerun kit-selftest" "$build_code"
+      fi
+    fi
+    [ -n "$tmp_repo" ] && rm -rf "$tmp_repo"
+    [ -n "$tmp_brief" ] && rm -rf "$(dirname "$tmp_brief")"
+  fi
+fi
+
+# --- gemini -------------------------------------------------------------
+if lane_enabled gemini; then
+  agy_bin=${KIT_AGY_BIN:-agy}
+  if ! command -v "$agy_bin" >/dev/null 2>&1; then
+    bad "gemini" "no agy on PATH: install from https://antigravity.google and sign in with agy" 3
+  else
+    tmp_repo=$(mk_selftest_repo)
+    tmp_brief=$(mk_selftest_brief)
+    if [ -z "$tmp_repo" ] || [ -z "$tmp_brief" ]; then
+      bad "gemini" "could not create a temp repo/brief" 2
+    else
+      build_out=$("$BIN_DIR/kit-gemini-build" --repo "$tmp_repo" --name kit-selftest-gemini --brief "$tmp_brief" --timeout 120 2>&1)
+      build_code=$?
+      if [ "$build_code" -eq 0 ]; then
+        ok "gemini"
+        case "$build_out" in *'WARNING: agy denied actions'*) warn 'Gemini denied actions; review the result and run checks yourself';; esac
+      else
+        printf '%s\n' "$build_out"
+        bad "gemini" "build check failed (exit $build_code); run agy to sign in, then rerun kit-selftest" "$build_code"
       fi
     fi
     [ -n "$tmp_repo" ] && rm -rf "$tmp_repo"

@@ -1,0 +1,40 @@
+# Hosts a guide.json source may point at. One host per line, exact match.
+# Add a host only after opening a page there that shows the fact it backs.
+
+# Vendors and their docs
+www.anthropic.com
+anthropic.com
+claude.com
+platform.claude.com
+docs.claude.com
+openai.com
+developers.openai.com
+learn.chatgpt.com
+blog.google
+deepmind.google
+ai.google.dev
+antigravity.google
+
+# Independent benchmarks and leaderboards
+artificialanalysis.ai
+www.vals.ai
+vals.ai
+labs.scale.com
+scale.com
+lmarena.ai
+grayswan.ai
+tbench.ai
+epoch.ai
+metr.org
+
+# Evaluations, reviews and write-ups used for facts in the guide
+coderabbit.ai
+www.coderabbit.ai
+every.to
+www.greptile.com
+blog.kilo.ai
+lucumr.pocoo.org
+www.datacamp.com
+www.dsebastien.net
+claudefa.st
+smartscope.blog

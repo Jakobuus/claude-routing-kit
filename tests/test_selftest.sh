@@ -326,5 +326,19 @@ case "$out" in
   *) pass ;;
 esac
 
+# Gemini self-test uses the same override as the build command.
+d=$(mktmp)
+write_profile "$d" none false false
+printf '{"version":1,"claude_plan":"api","codex":"none","gemini":"pro","jules":false,"kimi":false,"glm":false,"paseo":false}\n' > "$d/profile.json"
+agy_fake=$(mktmp)/agy
+cat > "$agy_fake" <<'AGY'
+#!/bin/bash
+printf 'hi\n' > hello.txt
+printf '{"status":"SUCCESS","response":"done"}\n'
+AGY
+chmod +x "$agy_fake"
+out=$(env ROUTING_KIT_HOME="$d" KIT_AGY_BIN="$agy_fake" "$SELFTEST" 2>&1)
+assert_contains "$out" 'gemini: ok' 'Gemini self-test runs a stub build'
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

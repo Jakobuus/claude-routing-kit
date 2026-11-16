@@ -1,0 +1,56 @@
+#!/bin/bash
+# kit-guide-check [--today YYYY-MM-DD] [--models FILE] [--profile FILE]
+# Prints one line when rules/models.json's "checked" date is more than 7 days
+# before today, one line when that date cannot be read, and nothing otherwise.
+# Always exits 0: it runs inside the session-start hook, which never blocks.
+# KIT_GUIDE_TODAY is a test seam for "today" (the --today flag wins).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$SCRIPT_DIR/kit-common"
+
+TODAY="${KIT_GUIDE_TODAY:-}"
+MODELS_FILE="$SCRIPT_DIR/../rules/models.json"
+PROFILE_FILE="$KIT_HOME/profile.json"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --today)   [ $# -ge 2 ] || exit 0; TODAY="$2"; shift 2 ;;
+    --models)  [ $# -ge 2 ] || exit 0; MODELS_FILE="$2"; shift 2 ;;
+    --profile) [ $# -ge 2 ] || exit 0; PROFILE_FILE="$2"; shift 2 ;;
+    *) exit 0 ;;
+  esac
+done
+
+# The kit directory is the git checkout a Codex or Gemini user updates.
+KIT_DIR=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null) || KIT_DIR=""
+[ -n "$KIT_DIR" ] || KIT_DIR=$(cd "$SCRIPT_DIR/.." && pwd -P)
+
+[ -n "$KIT_PYTHON3_BIN" ] || exit 0
+KIT_DIR_Q=$(kit_shell_quote "$KIT_DIR")
+kit_python3 - "$MODELS_FILE" "$PROFILE_FILE" "$TODAY" "$KIT_DIR_Q" <<'PY' 2>/dev/null
+import datetime, json, sys
+models, profile, today, kit_dir = sys.argv[1:5]
+unreadable = "Routing guide date unreadable; reinstall the kit."
+try:
+    with open(models) as f:
+        checked = datetime.date.fromisoformat(json.load(f)["checked"])
+    now = datetime.date.fromisoformat(today) if today else datetime.date.today()
+except Exception:
+    print(unreadable)
+    sys.exit(0)
+days = (now - checked).days
+if days <= 7:
+    sys.exit(0)
+import os
+main = os.environ.get("KIT_MAIN_AGENT") or ""
+if not main:
+    try:
+        with open(profile) as f:
+            main = json.load(f).get("main_agent") or "claude"
+    except Exception:
+        main = "claude"
+if main in ("codex", "gemini"):
+    how = "git -C " + kit_dir + " pull"
+else:
+    how = "claude plugin update routing-kit@routing-kit"
+print("Routing guide is %d days old. Update it: %s" % (days, how))
+PY
+exit 0

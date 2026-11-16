@@ -141,5 +141,40 @@ code=$?
 assert_eq 2 "$code" "kit-profile refuses on a faked native-Windows uname"
 assert_contains "$out" "routing-kit needs macOS, Linux, or WSL2 on Windows" "kit-profile prints the supported-systems message on native Windows"
 
+# --- 0.3: main_agent ---------------------------------------------------------
+d=$(mktmp)
+env ROUTING_KIT_HOME="$d" "$KP" set claude_plan pro >/dev/null 2>&1
+# A main agent whose lane is none is refused, with one clear line, and nothing changes.
+before=$(cat "$d/profile.json")
+out=$(env ROUTING_KIT_HOME="$d" "$KP" set main_agent gemini 2>&1); code=$?
+assert_eq 2 "$code" "set main_agent gemini with gemini none exits non-zero"
+assert_eq 1 "$(printf '%s\n' "$out" | grep -c .)" "main_agent refusal is one line"
+assert_contains "$out" "gemini" "main_agent refusal names the agent"
+out=$(env ROUTING_KIT_HOME="$d" "$KP" set main_agent codex 2>&1); code=$?
+assert_eq 2 "$code" "set main_agent codex with codex none exits non-zero"
+assert_eq "$before" "$(cat "$d/profile.json")" "profile unchanged after a refused main_agent"
+assert_exit 2 "set main_agent bogus refused" -- env ROUTING_KIT_HOME="$d" "$KP" set main_agent bogus
+# claude is always allowed; with a lane it works.
+assert_exit 0 "set main_agent claude" -- env ROUTING_KIT_HOME="$d" "$KP" set main_agent claude
+env ROUTING_KIT_HOME="$d" "$KP" set codex plus >/dev/null 2>&1
+assert_exit 0 "set main_agent codex with a Codex plan" -- env ROUTING_KIT_HOME="$d" "$KP" set main_agent codex
+assert_eq codex "$(env ROUTING_KIT_HOME="$d" "$KP" get | /usr/bin/jq -r .main_agent)" "get reflects main_agent codex"
+assert_exit 0 "validate passes with main_agent codex" -- env ROUTING_KIT_HOME="$d" "$KP" validate
+# The lane under the main agent cannot be switched off from under it.
+assert_exit 2 "set codex none refused while codex is the main agent" -- env ROUTING_KIT_HOME="$d" "$KP" set codex none
+# claude_plan none is for users whose main agent is not Claude.
+assert_exit 0 "claude_plan none allowed with a codex main agent" -- env ROUTING_KIT_HOME="$d" "$KP" set claude_plan none
+assert_exit 0 "validate passes with claude_plan none and main codex" -- env ROUTING_KIT_HOME="$d" "$KP" validate
+assert_exit 2 "set main_agent claude refused while claude_plan is none" -- env ROUTING_KIT_HOME="$d" "$KP" set main_agent claude
+d2=$(mktmp)
+assert_exit 2 "claude_plan none refused when the main agent is claude (absent)" -- env ROUTING_KIT_HOME="$d2" "$KP" set claude_plan none
+# A hand-edited profile with an invalid main_agent fails validate.
+printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"none","main_agent":"nobody"}\n' > "$d2/profile.json"
+assert_exit 2 "validate refuses main_agent nobody" -- env ROUTING_KIT_HOME="$d2" "$KP" validate
+printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"none","main_agent":"gemini"}\n' > "$d2/profile.json"
+assert_exit 2 "validate refuses main_agent gemini with gemini none" -- env ROUTING_KIT_HOME="$d2" "$KP" validate
+printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"none"}\n' > "$d2/profile.json"
+assert_exit 0 "validate passes with main_agent absent" -- env ROUTING_KIT_HOME="$d2" "$KP" validate
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

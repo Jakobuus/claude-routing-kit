@@ -384,5 +384,14 @@ if [ -f "$fr/.config/routing-kit/profile.json" ]; then
   assert_eq false "$(/usr/bin/jq -r 'has("previous_statusline_json")' "$fr/.config/routing-kit/profile.json")" "profile holds no previous statusline"
 else pass; fi
 
+# ---- kit-quota: claude_plan none leaves Claude out ------------------
+dn=$(mktmp)
+printf '{"version":1,"claude_plan":"none","main_agent":"codex","codex":"plus","jules":false,"kimi":false,"glm":false,"paseo":false}\n' > "$dn/profile.json"
+json=$(env ROUTING_KIT_HOME="$dn" CODEX_HOME="$dn/no-codex" "$QUOTA" --json)
+assert_eq null "$(printf '%s' "$json" | /usr/bin/jq -c '.claude')" "claude_plan none: --json claude is null"
+out=$(env ROUTING_KIT_HOME="$dn" CODEX_HOME="$dn/no-codex" "$QUOTA")
+case "$out" in *Claude*) fail "claude_plan none: text has no Claude";; *) pass;; esac
+case "$out" in "│"*|" │"*) fail "claude_plan none: no leading separator";; *) pass;; esac
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

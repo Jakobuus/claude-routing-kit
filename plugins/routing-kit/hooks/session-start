@@ -7,8 +7,22 @@ set -u
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$HOOK_DIR/.." && pwd -P)}"
 
+# The repair command depends on how the kit was installed: Codex and Gemini
+# users have a git checkout; Claude users have the plugin. MAIN_AGENT is filled
+# in once the profile is known; before that the Claude wording is used.
+case "${KIT_MAIN_AGENT:-}" in
+  claude|codex|gemini) MAIN_AGENT="$KIT_MAIN_AGENT" ;;
+  *) MAIN_AGENT=unknown ;;
+esac
 fail() {
-  echo "routing-kit: rules did not load ($1). Repair: claude plugin update routing-kit@routing-kit"
+  # The kit path goes into a command the user may paste: quote it. kit-common may
+  # be the very thing that is missing, so there is a plain fallback.
+  root_q=$(kit_shell_quote "$PLUGIN_ROOT" 2>/dev/null) || root_q="'$(printf '%s' "$PLUGIN_ROOT" | sed "s/'/'\\\\''/g")'"
+  case "$MAIN_AGENT" in
+    claude) echo "routing-kit: rules did not load ($1). Repair: claude plugin update routing-kit@routing-kit" ;;
+    unknown) echo "routing-kit: rules did not load ($1). Repair: update routing-kit (claude plugin update routing-kit@routing-kit, or git -C $root_q pull)" ;;
+    *) echo "routing-kit: rules did not load ($1). Repair: git -C $root_q pull" ;;
+  esac
   exit 0
 }
 
@@ -41,8 +55,25 @@ fi
 PROFILE_PATH="$KIT_HOME/profile.json"
 
 if [ ! -f "$PROFILE_PATH" ]; then
-  echo "routing-kit is installed but not set up yet. Drop START-HERE.md into Claude to finish setup."
+  echo "routing-kit is installed but not set up yet. Give your agent START-HERE.md from https://github.com/Jakobuus/claude-routing-kit and ask it to set up routing-kit."
   exit 0
+fi
+
+# KIT_MAIN_AGENT (set by hooks/session-start-agy) wins over the profile. Best
+# effort: an unreadable profile leaves the agent unknown (agent-neutral repair
+# wording) and is reported by the table step below.
+MAIN_AGENT=$(KIT_MAIN_AGENT="${KIT_MAIN_AGENT:-}" kit_python3 - "$PROFILE_PATH" <<'PY' 2>/dev/null
+import json, sys
+import os
+m = os.environ.get('KIT_MAIN_AGENT') or json.load(open(sys.argv[1])).get('main_agent') or 'claude'
+print(m if m in ('claude', 'codex', 'gemini') else 'claude')
+PY
+) || MAIN_AGENT=unknown
+[ -n "$MAIN_AGENT" ] || MAIN_AGENT=unknown
+main_arg=""
+if [ "$MAIN_AGENT" != unknown ]; then
+  export KIT_MAIN_AGENT="$MAIN_AGENT"
+  main_arg="--main $MAIN_AGENT"
 fi
 
 RULES_FILE="$PLUGIN_ROOT/rules/RULES.md"
@@ -50,35 +81,125 @@ if [ ! -f "$RULES_FILE" ]; then
   fail "rules/RULES.md missing"
 fi
 
-table=$("$PLUGIN_ROOT/bin/kit-routing-table" --profile "$PROFILE_PATH" 2>/dev/null)
+table=$("$PLUGIN_ROOT/bin/kit-routing-table" --profile "$PROFILE_PATH" $main_arg 2>/dev/null)
 rc=$?
 if [ "$rc" -ne 0 ] || [ -z "$table" ]; then
   fail "invalid profile"
 fi
 
-rules=$(kit_python3 - "$RULES_FILE" "$PROFILE_PATH" <<'PY'
+rules=$(kit_python3 - "$RULES_FILE" "$PROFILE_PATH" "$MAIN_AGENT" <<'PY'
 import json, re, sys
 with open(sys.argv[1]) as f:
     rules = f.read()
 with open(sys.argv[2]) as f:
     profile = json.load(f)
-for lane in ('codex', 'jules', 'kimi', 'glm'):
-    enabled = profile.get(lane) != 'none' if lane == 'codex' else profile.get(lane, False) is True
+for lane in ('codex', 'gemini', 'jules', 'kimi', 'glm'):
+    enabled = profile.get(lane) not in (None, 'none') if lane in ('codex', 'gemini') else profile.get(lane, False) is True
     pattern = r'<!-- lane:' + lane + r' -->\n(.*?)<!-- /lane:' + lane + r' -->\n?'
+    rules = re.sub(pattern, lambda m: m.group(1) if enabled else '', rules, flags=re.S)
+# Wording that only fits one main agent sits between main:<agent> markers.
+for agent in ('claude', 'codex', 'gemini'):
+    enabled = sys.argv[3] == agent
+    pattern = r'<!-- main:' + agent + r' -->\n(.*?)<!-- /main:' + agent + r' -->\n?'
     rules = re.sub(pattern, lambda m: m.group(1) if enabled else '', rules, flags=re.S)
 print(rules.rstrip())
 PY
 ) || fail "could not filter rules"
 
-output="$rules
+# One line when the routing guide is stale or its date unreadable; nothing
+# otherwise. kit-guide-check always exits 0.
+guide_line=""
+if [ -x "$PLUGIN_ROOT/bin/kit-guide-check" ]; then
+  guide_line=$("$PLUGIN_ROOT/bin/kit-guide-check" --profile "$PROFILE_PATH" 2>/dev/null)
+fi
+
+# Under Codex or Gemini the kit's bin folder is not reliably on PATH (Claude
+# Code's plugin system puts it there): say where the commands are, right before
+# the table. The path is shell-quoted when it needs it.
+bin_line=""
+if [ "$MAIN_AGENT" != claude ]; then
+  bin_line="Kit commands live in $(kit_shell_quote "$PLUGIN_ROOT/bin"); call them by full path if they are not on PATH."
+fi
+
+assemble() {
+  output="$rules
 
 ## Your routing table
-
+${bin_line:+
+$bin_line}
 $table"
+  if [ -n "$guide_line" ]; then
+    output="$output
 
-len=${#output}
-if [ "$len" -gt 9000 ]; then
-  fail "output too large ($len chars)"
+$guide_line"
+  fi
+}
+
+# drop_section HEADING: the rules without the "## HEADING" section.
+drop_section() {
+  printf '%s\n' "$rules" | awk -v h="## $1" '$0 == h { skip = 1; next } /^## / { skip = 0 } !skip { print }'
+}
+
+# Claude Code cuts hook output at 10,000 characters. Stay inside BUDGET by
+# dropping whole sections in a fixed order: Costly tools, then Long jobs. The
+# table, its Note lines and the stale-guide line always stay.
+BUDGET=9400
+HARD_CAP=9900
+# Sizes are counted in bytes, the same in every locale (the text has non-ASCII
+# characters, and bash would count characters or bytes depending on LANG).
+out_len() { printf '%s' "$output" | wc -c | tr -d ' '; }
+assemble
+if [ "$(out_len)" -gt "$BUDGET" ]; then
+  rules=$(drop_section "Costly tools"); assemble
+fi
+if [ "$(out_len)" -gt "$BUDGET" ]; then
+  rules=$(drop_section "Long jobs"); assemble
+fi
+# Last resort, after both drops: keep the table, its Note lines, the stale-guide
+# line and the bin line, and say the rules did not fit. Never the bare repair
+# text for a size reason.
+if [ "$(out_len)" -gt "$HARD_CAP" ]; then
+  rules="routing-kit rules are too long to load; reinstall the kit."
+  assemble
+fi
+
+# Gemini's model list comes from `agy models`, which needs the network: refresh
+# it in the background, detached, at most once per 24 h, and only for a profile
+# that has Gemini. The stamp is written first so a slow or failing agy is not
+# retried on every session start.
+if [ -x "$PLUGIN_ROOT/bin/kit-models-available" ] && kit_python3 - "$PROFILE_PATH" <<'PY' 2>/dev/null
+import json, sys
+g = json.load(open(sys.argv[1])).get('gemini')
+sys.exit(0 if g not in (None, 'none') else 1)
+PY
+then
+  stamp="$KIT_HOME/cache/agy-refresh.stamp"
+  lock="$KIT_HOME/cache/agy-refresh.lock"
+  # Sessions starting together must launch one refresh, not several: take an
+  # atomic lock (mkdir), recheck the stamp inside it, stamp, launch, release. A
+  # lock older than 10 minutes belongs to a dead session and is taken over.
+  have_lock=0
+  if mkdir -p "$KIT_HOME/cache" 2>/dev/null; then
+    if mkdir "$lock" 2>/dev/null; then
+      have_lock=1
+    else
+      lock_age=$(kit_mtime "$lock")
+      case "$lock_age" in ''|*[!0-9]*) lock_age=$(date +%s) ;; esac
+      if [ $(( $(date +%s) - lock_age )) -gt 600 ]; then
+        rmdir "$lock" 2>/dev/null
+        mkdir "$lock" 2>/dev/null && have_lock=1
+      fi
+    fi
+  fi
+  if [ "$have_lock" -eq 1 ]; then
+    now=$(date +%s)
+    last=$(kit_mtime "$stamp")
+    case "$last" in ''|*[!0-9]*) last=0 ;; esac
+    if [ $((now - last)) -ge 86400 ] && : > "$stamp" 2>/dev/null; then
+      ( "$PLUGIN_ROOT/bin/kit-models-available" --refresh gemini </dev/null >/dev/null 2>&1 & ) >/dev/null 2>&1
+    fi
+    rmdir "$lock" 2>/dev/null
+  fi
 fi
 
 printf '%s\n' "$output"

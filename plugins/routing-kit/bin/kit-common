@@ -102,7 +102,8 @@ kit_jq() {
 # kit_python3 ARGS... — same idea as kit_jq, for python3.
 kit_python3() {
   kit_require_python3
-  "$KIT_PYTHON3_BIN" "$@"
+  # -I: never put the current folder (which may be agent-written) on sys.path.
+  "$KIT_PYTHON3_BIN" -I "$@"
 }
 
 # kit_mtime FILE — FILE's mtime as epoch seconds, or empty on error. BSD
@@ -304,4 +305,13 @@ kit_git() {
   git_code=$?
   rm -rf "$git_home"
   return "$git_code"
+}
+
+# kit_shell_quote WORD — WORD as one shell word. Plain words stay as they are;
+# anything else is single-quoted, with each ' written as '\''.
+kit_shell_quote() {
+  case "$1" in
+    *[!A-Za-z0-9_./:+@%-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+    *) printf '%s' "$1" ;;
+  esac
 }

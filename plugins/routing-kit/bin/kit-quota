@@ -8,14 +8,14 @@
 #   Codex    the newest ~/.codex/sessions/**/*.jsonl line that carries
 #            rate_limits (ported window-picking logic from codex-usage).
 #   Jules    `jules remote list --session` (ported table-parsing logic
-#            from jules-usage; daily limit fixed at 15 for this kit).
+#            from jules-usage; daily limit from profile or environment override; defaults to 15).
 #   Kimi/GLM the token and cost sums of $KIT_HOME/ledger.tsv's locked-build
 #            rows since the 1st of the month.
 #
 # A lane the friend's profile has off is left out of the text line
 # entirely and reported as null under --json. A lane whose data could not
 # be read (missing file, malformed JSON, no jules on PATH, ...) shows as
-# "-" in the text and null under --json -- this script always exits 0
+# "–" in the text and null under --json -- this script always exits 0
 # once its own flags are valid; a friend's dashboard must never go blank
 # because one provider's data was unreadable.
 #
@@ -29,6 +29,7 @@ kit_require_supported
 # (exit 3, install hint) rather than letting a `x=$(kit_jq ...)` below
 # swallow the real problem and silently show every lane as unknown.
 kit_require_jq
+kit_require_python3
 
 AS_JSON=0
 case "${1:-}" in
@@ -45,16 +46,19 @@ JULES_SEEN_FILE="$KIT_HOME/jules-seen.tsv"
 # ---- profile (which lanes are on) -----------------------------------
 PROFILE_PATH="$KIT_HOME/profile.json"
 prof_codex='none'
+prof_gemini='none'
 prof_jules='false'
 prof_kimi='false'
 prof_glm='false'
 prof_jules_daily_limit=''
+prof_claude_plan=''
 if [ -f "$PROFILE_PATH" ]; then
-  row=$(kit_jq -r '[(.codex // "none"), (.jules // false), (.kimi // false), (.glm // false), (.jules_daily_limit // 15)] | @tsv' \
+  row=$(kit_jq -r '[(.codex // "none"), (.gemini // "none"), (.jules // false), (.kimi // false), (.glm // false), (.jules_daily_limit // 15)] | @tsv' \
     "$PROFILE_PATH" 2>/dev/null)
   if [ -n "$row" ]; then
-    IFS=$'\t' read -r prof_codex prof_jules prof_kimi prof_glm prof_jules_daily_limit <<< "$row"
+    IFS=$'\t' read -r prof_codex prof_gemini prof_jules prof_kimi prof_glm prof_jules_daily_limit <<< "$row"
   fi
+  prof_claude_plan=$(kit_jq -r '.claude_plan // ""' "$PROFILE_PATH" 2>/dev/null)
 fi
 
 # The env var always wins (documented override for tests and for a friend
@@ -180,7 +184,97 @@ if [ "$prof_codex" != none ] && [ -z "$codex_text" ]; then
   codex_json='{"five_hour":{"percent":null,"resets_epoch":null,"pace":null},"week":{"percent":null,"resets_epoch":null,"pace":null}}'
 fi
 
-# ---- Jules: `jules remote list --session`, daily limit 15 ------------
+# ---- Gemini: Antigravity /quota, cached for 60 seconds ------------------
+gemini_text='' gemini_json='null'
+if [ "$prof_gemini" != none ]; then
+  gemini_text='Gemini 5h – · wk – · Argon wk – · 3p 5h – · 3p wk –'
+  gemini_json='{"five_hour":null,"week":null,"argon_week":null,"third_party_five_hour":null,"third_party_week":null}'
+  agy_bin=${KIT_AGY_BIN:-agy}
+  cache="$KIT_HOME/agy-quota.json"
+  cache_age=999999
+  if [ -f "$cache" ]; then
+    cache_time=$(kit_mtime "$cache")
+    [[ $cache_time =~ ^[0-9]+$ ]] && cache_age=$((NOW - cache_time))
+  fi
+  if (( cache_age < 0 || cache_age >= 60 )); then
+    if command -v "$agy_bin" >/dev/null 2>&1; then
+      mkdir -p "$KIT_HOME"
+      tmp=$(mktemp "$KIT_HOME/.agy-quota.XXXXXX")
+      quota_timeout=${KIT_AGY_QUOTA_TIMEOUT:-30}
+      [[ $quota_timeout =~ ^[1-9][0-9]*$ ]] || quota_timeout=30
+      if kit_python3 - "$agy_bin" "$HOME" "$tmp" "$quota_timeout" <<'PYFETCH'
+import os, signal, subprocess, sys
+agy, home, output, timeout = sys.argv[1:]
+with open(output, 'wb') as out, open(os.devnull, 'rb') as stdin, open(os.devnull, 'wb') as err:
+    proc = subprocess.Popen([agy, '--output-format', 'json', '--print-timeout', timeout + 's', '-p', '/quota'],
+                            cwd=home, stdin=stdin, stdout=out, stderr=err, start_new_session=True)
+    try:
+        sys.exit(proc.wait(timeout=int(timeout)))
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+        sys.exit(124)
+PYFETCH
+      then fetch_ok=1; else fetch_ok=0; fi
+      if [ "$fetch_ok" -eq 1 ] && kit_jq -e '.command.data.groups | type == "array"' "$tmp" >/dev/null 2>&1; then
+        mv "$tmp" "$cache"
+      else
+        rm -f "$tmp" "$cache"
+      fi
+    else
+      rm -f "$cache"
+    fi
+  fi
+  if [ -f "$cache" ]; then
+    parsed=$(kit_python3 - "$cache" <<'PYQUOTA'
+import datetime, json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    buckets = {b['id']: b for g in data['command']['data']['groups'] for b in g['buckets']}
+    names = ['gemini-5h', 'gemini-weekly', 'gemini-argon-wtu-weekly', '3p-5h', '3p-weekly']
+    out = []
+    for name in names:
+        b = buckets.get(name)
+        f = b.get('remaining_fraction') if isinstance(b, dict) else None
+        try:
+            if not isinstance(f, (int, float)) or isinstance(f, bool) or not 0 <= f <= 1:
+                raise ValueError()
+            # Python 3.9/3.10 accept at most microseconds, while agy can
+            # return nanoseconds. Usage stays unknown if the fraction is absent.
+            reset_text = b['reset_time'].replace('Z', '+00:00')
+            if '.' in reset_text:
+                prefix, fraction = reset_text.split('.', 1)
+                suffix = fraction.find('+')
+                if suffix < 0:
+                    suffix = fraction.find('-')
+                reset_text = prefix + (fraction[suffix:] if suffix >= 0 else '')
+            reset = int(datetime.datetime.fromisoformat(reset_text).timestamp())
+            out.append(f'{(1-f)*100:.2f} {reset}')
+        except (ValueError, TypeError, KeyError, AttributeError):
+            out.append('- -')
+    print('\n'.join(out))
+except (OSError, ValueError, KeyError, TypeError):
+    pass
+PYQUOTA
+)
+    if [ -n "$parsed" ]; then
+      idx=0
+      texts=() jsons=()
+      while IFS=' ' read -r pct reset; do
+        case "$idx" in 0|3) window=18000;; *) window=604800;; esac
+        bucket "$pct" "$reset" "$window"
+        texts+=("$BTEXT") jsons+=("$BJSON")
+        idx=$((idx + 1))
+      done <<< "$parsed"
+      if [ "$idx" -eq 5 ]; then
+        gemini_text="Gemini 5h ${texts[0]} · wk ${texts[1]} · Argon wk ${texts[2]} · 3p 5h ${texts[3]} · 3p wk ${texts[4]}"
+        gemini_json=$(printf '{"five_hour":%s,"week":%s,"argon_week":%s,"third_party_five_hour":%s,"third_party_week":%s}' "${jsons[0]}" "${jsons[1]}" "${jsons[2]}" "${jsons[3]}" "${jsons[4]}")
+      fi
+    fi
+  fi
+fi
+
+# ---- Jules: `jules remote list --session`, daily limit from profile or environment override (default 15) ----
 jules_text='' jules_json='null'
 if [ "$prof_jules" = true ]; then
   jules_text='Jules 24h –'
@@ -341,13 +435,18 @@ if [ "$prof_glm" = true ]; then
 fi
 
 # ---- assemble ----------------------------------------------------------
+# A profile with no Claude plan leaves Claude out entirely.
+if [ "$prof_claude_plan" = none ]; then
+  claude_text='' claude_json='null'
+fi
 if [ "$AS_JSON" -eq 1 ]; then
-  printf '{"claude":%s,"codex":%s,"jules":%s,"kimi":%s,"glm":%s}\n' \
-    "$claude_json" "$codex_json" "$jules_json" "$kimi_json" "$glm_json"
+  printf '{"claude":%s,"codex":%s,"gemini":%s,"jules":%s,"kimi":%s,"glm":%s}\n' \
+    "$claude_json" "$codex_json" "$gemini_json" "$jules_json" "$kimi_json" "$glm_json"
 else
   line="$claude_text"
-  for seg in "$codex_text" "$jules_text" "$kimi_text" "$glm_text"; do
-    [ -n "$seg" ] && line="$line │ $seg"
+  for seg in "$codex_text" "$gemini_text" "$jules_text" "$kimi_text" "$glm_text"; do
+    [ -n "$seg" ] || continue
+    if [ -n "$line" ]; then line="$line │ $seg"; else line="$seg"; fi
   done
   printf '%s\n' "$line"
 fi

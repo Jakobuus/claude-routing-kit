@@ -1,0 +1,18 @@
+#!/bin/bash
+# hooks/session-start-agy — SessionStart adapter for Antigravity (agy). Runs the
+# normal hook for a Gemini main session and wraps its plain text as the JSON agy
+# expects: {"injectSteps":[{"systemMessage":{"systemMessage":"<text>"}}]}.
+# Never blocks a session: any problem prints nothing and exits 0.
+set -u
+HOOK_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+[ -x "$HOOK_DIR/session-start" ] || exit 0
+PY=/usr/bin/python3
+[ -x "$PY" ] || PY="$(command -v python3 2>/dev/null || true)"
+[ -n "$PY" ] || exit 0
+text=$(KIT_MAIN_AGENT=gemini "$HOOK_DIR/session-start" 2>/dev/null) || exit 0
+printf '%s' "$text" | "$PY" -I -c '
+import json, sys
+text = sys.stdin.read()
+sys.stdout.write(json.dumps({"injectSteps": [{"systemMessage": {"systemMessage": text}}]}) + "\n")
+' 2>/dev/null
+exit 0

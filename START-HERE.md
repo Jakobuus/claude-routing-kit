@@ -382,6 +382,13 @@ Run `kit-selftest`. Check lines say `<check>: ok`, `<check>: FAIL: <fix>` or `<c
   else still works.
 - `KNOWN-GAP` is the command-line note from step 6. `SKIP` marks a check that doesn't apply here,
   such as the Kimi/GLM sandbox on Linux. Neither needs a fix.
+- **If you (the agent) run inside a sandbox**, as Codex does, some checks can fail for that reason
+  alone: the Codex build check needs the network, and the lockdown check needs to create test files
+  under the home folder. Do not switch anything off because of such a failure, and do not tell
+  them the kit is broken. Report it as "could not be checked from inside my sandbox". Then ask them
+  to run the self-test once in their own terminal and paste the result. Codex or Gemini installs:
+  `~/.config/routing-kit/kit/plugins/routing-kit/bin/kit-selftest`. Claude Code: `kit-selftest`.
+  Real failures, which still show when run in their own terminal, keep the guidance above.
 - For Codex or Gemini as main agent, the self-test checks the kit and the helpers. It cannot see
   whether the agent itself loaded the rules. Step 9 has the one-question check for that.
 

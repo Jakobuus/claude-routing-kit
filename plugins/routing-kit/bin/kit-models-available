@@ -19,7 +19,9 @@ case "$1" in
       mkdir -p "$cache_home/cache" || exit 4
       tmp=$(mktemp "$cache_home/cache/agy-models.XXXXXX") || exit 4
       trap 'rm -f "$tmp" "$tmp.raw"' EXIT
-      if agy models </dev/null > "$tmp.raw" 2>/dev/null; then
+      # From the kit's cache folder, never the caller's: an untrusted project folder
+      # could carry an agy config of its own.
+      if (cd "$cache_home/cache" && agy models </dev/null) > "$tmp.raw" 2>/dev/null; then
         awk '$1 ~ /^[a-z0-9][a-z0-9.-]*$/ && length($1)>=3 && length($1)<=61 {print $1}' "$tmp.raw" > "$tmp"
         [ ! -s "$tmp" ] || mv "$tmp" "$file" || exit 4
       fi

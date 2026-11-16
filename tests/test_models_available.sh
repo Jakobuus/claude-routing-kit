@@ -41,5 +41,20 @@ assert_exit 4 'empty codex list is unknown' -- "$BIN" codex
 assert_exit 4 'no arguments' -- "$BIN"
 assert_exit 4 'unknown lane' -- "$BIN" bogus
 assert_exit 4 'refresh is gemini only' -- "$BIN" --refresh codex
+# agy models runs from the kit's cache folder, never from the caller's folder
+# (an untrusted project folder could carry an agy config of its own).
+untrusted=$(mktmp)/project; mkdir -p "$untrusted"
+cwdmark="$p/agy-cwd"
+cat > "$p/bin/agy" <<'SH'
+#!/bin/bash
+pwd -P > "$AGY_CWD_MARK"
+printf 'cwd-model description\n'
+SH
+chmod +x "$p/bin/agy"
+(cd "$untrusted" && env PATH="$p/bin:$PATH" AGY_CWD_MARK="$cwdmark" "$BIN" --refresh gemini >/dev/null)
+want=$(cd "$ROUTING_KIT_HOME/cache" && pwd -P)
+assert_eq "$want" "$(cat "$cwdmark" 2>/dev/null)" 'agy models runs from the cache folder'
+assert_contains "$(cat "$ROUTING_KIT_HOME/cache/agy-models.txt")" 'cwd-model' 'refresh from the cache folder still fills the cache'
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

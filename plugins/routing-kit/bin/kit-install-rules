@@ -178,6 +178,11 @@ refuse() { kit_die 2 "$1 Nothing was changed."; }
 for f in "$HOOKS_FILE" "$HOOKS_FILE$BAK" "$CREATED_LIST" "$COMMANDS_LIST"; do
   [ -L "$f" ] && refuse "$f is a symlink; refusing to use it."
 done
+# The install record paths must be plain files (or absent): a folder there would
+# swallow the record and the install would look fine with no usable record.
+for f in "$CREATED_LIST" "$COMMANDS_LIST"; do
+  [ -e "$f" ] && [ ! -f "$f" ] && refuse "$f is not a regular file."
+done
 printf '%s\n' "$INSTR_ALL" | while IFS= read -r f; do
   if [ -L "$f" ] || [ -L "$f$BAK" ]; then exit 1; fi
 done || refuse "An instructions file is a symlink; refusing to edit it."

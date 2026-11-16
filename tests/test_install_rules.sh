@@ -539,5 +539,23 @@ env ROUTING_KIT_HOME="$kh" KIT_TEST_MODE=routing-kit-tests KIT_TEST_FAIL_RECORD=
 [ ! -e "$s/hooks.json" ] && [ ! -e "$s/AGENTS.md" ] && pass || fail "fresh install left files after a failed recording"
 [ ! -e "$kh/install-created.txt" ] && pass || fail "fresh install left a created-files record after a failed recording"
 
+# ---- Bookkeeping paths must be regular files ----------------------------------
+for bk in install-commands.txt install-created.txt; do
+  for ag in codex gemini; do
+    if [ $ag = codex ]; then HF=hooks.json; else HF=config/hooks.json; fi
+    s=$(mktmp); mkdir -p "$s/config"; kh=$(mktmp); mkdir "$kh/$bk"
+    printf '{"keep":1}\n' > "$s/$HF"; printf 'My rules\n' > "$s/AGENTS.md"
+    cp "$s/$HF" "$s/h.orig"; cp "$s/AGENTS.md" "$s/a.orig"
+    out=$(env ROUTING_KIT_HOME="$kh" "$KI" --agent $ag --home "$s" 2>&1); code=$?
+    [ "$code" -ne 0 ] && pass || fail "$ag: directory at $bk accepted"
+    assert_eq 1 "$(printf '%s\n' "$out" | grep -c .)" "$ag: directory at $bk: one line"
+    bytes_same "$s/$HF" "$s/h.orig" && bytes_same "$s/AGENTS.md" "$s/a.orig" && pass || fail "$ag: files changed with a directory at $bk"
+    [ -z "$(ls -A "$kh/$bk")" ] && pass || fail "$ag: something was written inside the directory at $bk"
+    [ ! -e "$s/$HF.routing-kit.bak" ] && pass || fail "$ag: backup made with a directory at $bk"
+    env ROUTING_KIT_HOME="$kh" "$KI" --agent $ag --home "$s" --uninstall >/dev/null 2>&1; code=$?
+    bytes_same "$s/$HF" "$s/h.orig" && pass || fail "$ag: uninstall changed files with a directory at $bk"
+  done
+done
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

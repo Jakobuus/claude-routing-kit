@@ -201,7 +201,8 @@ fi
 s=$(mktmp); printf 'rules\n' > "$s/AGENTS.md"; chmod 640 "$s/AGENTS.md"
 "$KI" --agent codex --home "$s" >/dev/null 2>&1
 assert_eq 0 "$(leftovers "$s")" "no temp files left after install"
-mode=$(stat -f '%Lp' "$s/AGENTS.md" 2>/dev/null || stat -c '%a' "$s/AGENTS.md")
+# BSD stat (macOS) and GNU stat (Linux) disagree on -f; pick by system.
+case "$(uname)" in Darwin) mode=$(stat -f '%Lp' "$s/AGENTS.md") ;; *) mode=$(stat -c '%a' "$s/AGENTS.md") ;; esac
 assert_eq 640 "$mode" "install keeps the file mode"
 
 # 3. Marker order and shape: refuse, change nothing (both instruction files, hooks.json).

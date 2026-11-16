@@ -251,7 +251,7 @@ fi
 # denial result, not a shortcut. -----------------------------------------
 retry_counter=$(mktmp)/counter
 echo 0 > "$retry_counter"
-retry_marker_dir=$(mktemp -d "$HOME/.routing-kit-test-retry-XXXXXX")
+retry_marker_dir=$(mktmp)
 printf 'retry-marker\n' > "$retry_marker_dir/marker"
 before_pass=$_CANARY_PASS; before_fail=$_CANARY_FAIL; before_env=$_CANARY_ENV_FAIL
 # Redirected to a file, not captured via $(...): a command substitution runs

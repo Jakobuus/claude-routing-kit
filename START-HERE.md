@@ -317,8 +317,7 @@ Read them the ones that apply to what they chose, in plain words.
 - **Muse is not part of the kit.** Muse tokens only work inside the Muse app, not from a command
   line or an API.
 - **Gemini runs under the user's own Google account and login, with `--sandbox` (terminal
-  restrictions) and a scrubbed environment** (their shell's tokens and keys are not passed on). It
-  works on a fresh git clone, and its patch is built from clean git data after it exits. That is
+  restrictions) and a scrubbed environment** (their shell's tokens and keys are not passed on). The patch is built from a fresh clone of your repo and a private snapshot of the helper's output after the helper has stopped; if a helper can write outside its sandbox (for example into your source repo), the sandbox itself is broken and the kit cannot protect against that. That is
   not a jail: in a test it refused a shell write to the home folder, but it can still reach
   whatever their login can. Never use `--dangerously-skip-permissions`. A denied action means its
   result needs manual checks. On Linux, if a Gemini build reports that agy is not signed in, run it

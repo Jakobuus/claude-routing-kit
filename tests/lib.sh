@@ -76,6 +76,9 @@ assert_exit() {
 # caller's own shell.
 _MKTMP_LIST=$(mktemp "${TMPDIR:-/tmp}/rk-test-list.XXXXXX")
 _mktmp_cleanup() {
+  local pid
+  for pid in $(jobs -pr); do kill "$pid" 2>/dev/null; done
+  wait 2>/dev/null
   [ -f "$_MKTMP_LIST" ] || return 0
   while IFS= read -r d; do
     [ -n "$d" ] && rm -rf "$d"
@@ -83,6 +86,8 @@ _mktmp_cleanup() {
   rm -f "$_MKTMP_LIST"
 }
 trap _mktmp_cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 mktmp() {
   # If `mktemp -d` fails, its stdout is empty. A bare `cd ""` silently

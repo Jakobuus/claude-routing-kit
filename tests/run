@@ -3,14 +3,25 @@
 set -u
 cd "$(dirname "$0")"
 
+garbage_count() {
+  find "${TMPDIR:-/tmp}" /tmp -maxdepth 1 -user "$(id -un)" \( -name 'rk-*' -o -name 'kit-*' \) -print 2>/dev/null
+  find "$HOME" -maxdepth 1 -user "$(id -un)" -name '.routing-kit-canary-*' -print 2>/dev/null
+}
+before_garbage=$(garbage_count | sort -u | wc -l)
 total_pass=0
 total_fail=0
 any_fail=0
 
 for f in test_*.sh; do
   [ -f "$f" ] || continue
+  file_before=$(garbage_count | sort -u | wc -l)
   out=$(bash "$f" 2>&1)
   code=$?
+  file_after=$(garbage_count | sort -u | wc -l)
+  if [ "$file_after" -gt "$file_before" ]; then
+    echo "FAIL: $f left $((file_after - file_before)) temporary entries behind"
+    any_fail=1
+  fi
   echo "$out"
   p=$(echo "$out" | sed -n 's/.*PASS \([0-9][0-9]*\) \/ FAIL \([0-9][0-9]*\).*/\1/p' | tail -1)
   fcount=$(echo "$out" | sed -n 's/.*PASS \([0-9][0-9]*\) \/ FAIL \([0-9][0-9]*\).*/\2/p' | tail -1)
@@ -33,6 +44,11 @@ for f in test_*.sh; do
   fi
 done
 
+after_garbage=$(garbage_count | sort -u | wc -l)
+if [ "$after_garbage" -gt "$before_garbage" ]; then
+  echo "FAIL: suite left $((after_garbage - before_garbage)) temporary entries behind (before $before_garbage, after $after_garbage)"
+  any_fail=1
+fi
 echo "PASS $total_pass / FAIL $total_fail"
 if [ "$any_fail" -ne 0 ]; then
   exit 1

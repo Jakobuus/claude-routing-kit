@@ -119,6 +119,7 @@ before_count=$(ls -d $git_home_glob 2>/dev/null | wc -l | tr -d ' ')
 bash -c '
   . "'"$KC"'"
   d=$(mktemp -d)
+  trap 'rm -rf "$d"' EXIT
   kit_git -C "$d" init -q
   kit_git -C "$d" config user.email you@example.com
   kit_git -C "$d" config user.name "Test User"

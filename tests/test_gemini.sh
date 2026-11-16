@@ -193,5 +193,294 @@ done
 case "$dseen" in *KIT_AGY_ALLOW_DBUS*) fail "the opt-in variable itself was forwarded" ;; *) pass ;; esac
 case "$seen" in *KIT_AGY_ALLOW_DBUS*) fail "the opt-in variable leaked without being set" ;; *) pass ;; esac
 
+# Shared staging scratch is always removed.
+if [ -d "$home/scratch" ] && [ -n "$(ls -A "$home/scratch")" ]; then
+  fail 'staging scratch was not removed'
+else
+  pass
+fi
+
+
+# Snapshot safety regressions:
+# 1. Directory swapped for an outside symlink (10 builds).
+# 2. File swapped for an outside symlink (10 builds).
+# 3. Sparse apparent size exceeds the growth budget.
+# 4. Many small files exceed the growth budget together.
+# 5. Executable mode survives the snapshot.
+for safety_case in dirswap fileswap sparse many executable; do
+ repetitions=1
+ case "$safety_case" in dirswap|fileswap) repetitions=10 ;; esac
+ for ((iteration=1; iteration<=repetitions; iteration++)); do
+  shome=$(mktmp); srepo=$(mktmp); sbindir=$(mktmp); smarks=$(mktmp)
+  git -C "$srepo" init -q
+  git -C "$srepo" config user.name Test
+  git -C "$srepo" config user.email you@example.com
+  echo old > "$srepo/base"
+  git -C "$srepo" add .; git -C "$srepo" commit -qm initial
+  mkdir "$smarks/outside"
+  echo OUTSIDE-SECRET-MARKER > "$smarks/outside/secret"
+  cat > "$sbindir/agy" <<SH
+#!/bin/bash
+cat >/dev/null
+while [ "\$#" -gt 0 ]; do
+ if [ "\$1" = -C ]; then shift; cd "\$1" || exit 1; fi
+ shift
+done
+python3 - '$safety_case' '$smarks' <<'PYSAFE'
+import os, sys, time
+case, marks = sys.argv[1:]
+if case in ('dirswap', 'fileswap'):
+    if case == 'dirswap':
+        os.mkdir('sub')
+        open('sub/safe', 'w').write('safe')
+        target = marks + '/outside'
+    else:
+        open('sub', 'w').write('safe')
+        target = marks + '/outside/secret'
+    if os.fork() == 0:
+        end = time.monotonic() + 5
+        while time.monotonic() < end:
+            try:
+                os.rename('sub', 'saved')
+                os.symlink(target, 'sub')
+                os.unlink('sub')
+                os.rename('saved', 'sub')
+            except OSError:
+                pass
+        os._exit(0)
+elif case == 'sparse':
+    with open('large', 'wb') as f: f.truncate(1024 * 1024 * 1024)
+elif case == 'many':
+    for i in range(1000):
+        with open('small%d' % i, 'wb') as f: f.write(b'x' * 4096)
+else:
+    open('executable', 'w').write('#!/bin/sh\nexit 0\n')
+    os.chmod('executable', 0o755)
+PYSAFE
+printf '{"status":"SUCCESS","response":"done"}\n'
+SH
+  chmod +x "$sbindir/agy"
+  echo edit > "$smarks/brief.md"
+  start=$SECONDS
+  sout=$(env PATH="$sbindir:/usr/bin:/bin" ROUTING_KIT_HOME="$shome" ROUTING_KIT_MAX_GROWTH_MB=1 KIT_AGY_BIN="$sbindir/agy" "$BIN" --repo "$srepo" --name safety --brief "$smarks/brief.md" 2>&1)
+  scode=$?
+  spatch=$(find "$shome/runs" -name build.patch | head -1)
+  case "$safety_case" in
+   dirswap|fileswap)
+    case "$scode" in 0|4) pass ;; *) fail "swap exit $scode" ;; esac
+    case "$sout" in *Traceback*) fail 'snapshot traceback' ;; *) pass ;; esac
+    if [ -n "$spatch" ] && grep -q OUTSIDE-SECRET-MARKER "$spatch"; then fail 'outside content copied'; else pass; fi ;;
+   sparse|many)
+    assert_eq 4 "$scode" 'size refused'
+    assert_contains "$sout" 'it grew by more than 1 MB' 'growth message'
+    [ $((SECONDS-start)) -lt 10 ] && pass || fail 'size refusal too slow' ;;
+   executable)
+    assert_eq 0 "$scode" 'executable succeeds'
+    assert_contains "$(cat "$spatch")" 'new file mode 100755' 'executable mode' ;;
+  esac
+  [ -z "$(ls -A "$shome/scratch" 2>/dev/null)" ] && pass || fail 'scratch remains'
+ done
+done
+
+# Seven shared staging regressions, exercised through the provider stub.
+for staging_case in moved deep partial location success failure timeout race symlink fifo hardlink nested diff merge; do
+  shome=$(mktmp); srepo=$(mktmp); sbindir=$(mktmp); smarks=$(mktmp)
+  git -C "$srepo" init -q
+  git -C "$srepo" config user.name Test
+  git -C "$srepo" config user.email you@example.com
+  printf 'old\n' > "$srepo/changed.txt"
+  case "$staging_case" in
+    diff|merge)
+      printf '*.txt %s=x\n' "$staging_case" > "$srepo/.gitattributes"
+      if [ "$staging_case" = diff ]; then key=diff.x.textconv; else key=merge.x.driver; fi
+      git -C "$srepo" config "$key" "touch '$smarks/driver'; cat" ;;
+  esac
+  git -C "$srepo" add .; git -C "$srepo" commit -qm initial
+  if [ "$staging_case" = deep ]; then
+    i=1
+    while [ "$i" -lt 300 ]; do
+      git -C "$srepo" -c commit.gpgsign=false commit -qm history --allow-empty
+      i=$((i + 1))
+    done
+    assert_eq 300 "$(git -C "$srepo" rev-list --count HEAD)" 'source history'
+  fi
+  if [ "$staging_case" = partial ]; then
+    git -C "$srepo" config uploadpack.allowFilter true
+    partial_repo=$(mktmp)
+    git clone -q --filter=blob:none "file://$srepo" "$partial_repo"
+    srepo="$partial_repo"
+    assert_eq true "$(git -C "$srepo" config remote.origin.promisor)" 'source is partial clone'
+  fi
+  printf 'OUTSIDE-SECRET-MARKER\n' > "$smarks/outside"
+  cat > "$sbindir/agy" <<SH
+#!/bin/bash
+cat >/dev/null
+while [ "\$#" -gt 0 ]; do
+  if [ "\$1" = -C ]; then shift; cd "\$1" || exit 1; fi
+  shift
+done
+touch '$smarks/started'
+printf 'complete-version\n' > changed.txt
+case '$staging_case' in
+ failure) exit 1 ;;
+ timeout) sleep 10 ;;
+ symlink) ln -s '$smarks/outside' link ;;
+ fifo) mkfifo pipe ;;
+ hardlink) ln changed.txt second ;;
+ nested) mkdir -p sub/.git ;;
+ race)
+   (end=\$(( \$(date +%s) + 5 )); while [ \$(date +%s) -lt \$end ]; do
+      printf 'rewrite-version\n' > '$smarks/next'; mv '$smarks/next' changed.txt
+    done) >/dev/null 2>&1 &
+   echo \$! > '$smarks/pid' ;;
+esac
+printf '{"status":"SUCCESS","response":"done"}\n'
+SH
+  chmod +x "$sbindir/agy"
+  build_bin="$BIN"
+  if [ "$staging_case" = moved ]; then
+    # kit_git deliberately ignores PATH. Instrument an isolated copy only.
+    instrumented=$(mktmp)
+    cp -R "$(dirname "$BIN")/.." "$instrumented/plugin"
+    build_bin="$instrumented/plugin/bin/$(basename "$BIN")"
+    python3 - "$instrumented/plugin/bin/kit-common" "$sbindir" <<'INSTRUMENT'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().replace('PATH=/usr/bin:/bin', 'PATH=' + sys.argv[2] + ':/usr/bin:/bin'))
+INSTRUMENT
+    real_git=$(command -v git)
+    cat > "$sbindir/git" <<SH
+#!/bin/bash
+case "\$*" in
+  *'-C $srepo rev-parse HEAD')
+  if [ ! -e '$smarks/moved' ]; then
+  '$real_git' "\$@"
+  : > '$smarks/moved'
+  '$real_git' -C '$srepo' -c commit.gpgsign=false commit --allow-empty -qm moved
+  exit 0
+  fi ;;
+esac
+exec '$real_git' "\$@"
+SH
+    chmod +x "$sbindir/git"
+  fi
+  sbrief="$smarks/brief.md"; echo edit > "$sbrief"
+  # Observe scratch without entering it or changing staging's environment.
+  if [ "$staging_case" = location ] || [ "$staging_case" = deep ]; then
+    python3 -I - "$shome" "$smarks" <<'OBS' &
+import glob, os, stat, subprocess, sys, time
+home, marks = sys.argv[1:]
+end = time.monotonic() + 15
+while time.monotonic() < end:
+    for path in glob.glob(home + '/scratch/kit-build-git.*'):
+        try:
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+        except FileNotFoundError:
+            continue
+        if os.path.isfile(path + '/git/.git/shallow'):
+            result = subprocess.run(['/usr/bin/git', '-C', path + '/git', 'rev-list', '--count', 'HEAD'], capture_output=True, text=True)
+            if result.returncode == 0:
+                with open(marks + '/depth', 'w') as depth:
+                    depth.write(result.stdout.strip())
+        if not os.path.isfile(marks + '/depth'):
+            continue
+        with open(marks + '/observed', 'w') as f:
+            f.write('%s %o' % (path, mode))
+        sys.exit(0)
+    time.sleep(.001)
+OBS
+    observer=$!
+  fi
+  sout=$(env PATH="$sbindir:/usr/bin:/bin" ROUTING_KIT_HOME="$shome" KIT_AGY_BIN="$sbindir/agy" \
+    "$build_bin" --repo "$srepo" --name staging --brief "$sbrief" --timeout 2 2>&1)
+  scode=$?
+  spatch=$(find "$shome/runs" -name build.patch | head -1)
+  case "$staging_case" in
+    # 1. Scratch location and private mode.
+    location)
+      wait "$observer"
+      observed=$(cat "$smarks/observed" 2>/dev/null)
+      case "$observed" in "$shome"/scratch/kit-build-git.*' 700') pass ;; *) fail "scratch location/mode: $observed" ;; esac ;;
+    # 2. Cleanup after success, provider failure, and timeout.
+    moved)
+      assert_eq 2 "$scode" 'moved source refused'
+      assert_contains "$sout" 'repo changed' 'moved source explanation'
+      [ ! -e "$smarks/started" ] && pass || fail 'agent started after source moved'
+      [ -z "$(find "$shome/runs" "$shome/scratch" -mindepth 1 -print 2>/dev/null)" ] && pass || fail 'moved source left artifacts' ;;
+    deep)
+      wait "$observer"
+      assert_eq 0 "$scode" 'deep source builds'
+      assert_eq 1 "$(cat "$smarks/depth" 2>/dev/null)" 'scratch has one commit'
+      assert_contains "$(cat "$spatch" 2>/dev/null)" '+complete-version' 'deep source patch' ;;
+    partial)
+      assert_eq 0 "$scode" 'partial clone builds'
+      assert_contains "$(cat "$spatch" 2>/dev/null)" '+complete-version' 'partial clone patch' ;;
+    success) assert_eq 0 "$scode" 'successful staging' ;;
+    failure|timeout) assert_eq 4 "$scode" "$staging_case status" ;;
+    # 3. A racing writer cannot produce mixed or empty content.
+    race)
+      assert_eq 0 "$scode" 'racing snapshot finishes'
+      added=$(sed -n '/^+++ /d; s/^+//p' "$spatch")
+      case "$added" in complete-version|rewrite-version) pass ;; *) fail "inconsistent snapshot: $added" ;; esac
+      kill "$(cat "$smarks/pid")" 2>/dev/null || true ;;
+    # 4. Symlinks remain links and never disclose their target content.
+    symlink)
+      assert_eq 0 "$scode" 'symlink build'
+      assert_contains "$(cat "$spatch")" '120000' 'symlink mode'
+      if grep -q OUTSIDE-SECRET-MARKER "$spatch"; then fail 'symlink target disclosed'; else pass; fi ;;
+    # 5. Snapshot refuses unsafe filesystem entries with the established errors.
+    fifo|hardlink|nested)
+      assert_eq 4 "$scode" "$staging_case refused"
+      case "$staging_case" in
+        fifo) reason='a FIFO, socket or device file' ;;
+        hardlink) reason='a file with more than one hard link' ;;
+        nested) reason='a nested git repository or submodule' ;;
+      esac
+      assert_contains "$sout" 'refusing to stage the build in' 'refusal prefix'
+      assert_contains "$sout" "$reason" 'refusal reason'
+      [ -z "$spatch" ] && pass || fail 'refusal left patch' ;;
+    # 6 and 7. Source diff and merge drivers cannot execute.
+    diff|merge)
+      assert_eq 0 "$scode" "$staging_case driver build"
+      [ ! -e "$smarks/driver" ] && pass || fail "$staging_case driver executed"
+      assert_contains "$(cat "$spatch")" '-old' 'real deletion'
+      assert_contains "$(cat "$spatch")" '+complete-version' 'real addition' ;;
+  esac
+  [ -z "$(find "$shome/scratch" -mindepth 1 -print 2>/dev/null)" ] && pass || fail "$staging_case left scratch"
+done
+
+# Sleep guard receives the build script PID, once, without changing output.
+src="$erepo"
+fakebin=$(mktmp)
+caflog=$(mktmp)/caffeinate
+cat > "$fakebin/caffeinate" <<SH
+#!/bin/bash
+printf '%s\n' "\$*" >> "$caflog"
+SH
+chmod +x "$fakebin/caffeinate"
+nocaf=$(mktmp)
+for tool in /usr/bin/* /bin/*; do
+  [ "${tool##*/}" = caffeinate ] && continue
+  [ -e "$nocaf/${tool##*/}" ] || ln -s "$tool" "$nocaf/${tool##*/}"
+done
+for awake in yes no; do
+  [ "$awake" = yes ] || rm "$fakebin/caffeinate"
+  env PATH="$fakebin:$nocaf" ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" "$BIN" --repo "$src" --name awake --brief "$brief" >"$caflog.$awake" 2>&1 &
+  build_pid=$!
+  wait "$build_pid"
+  assert_eq 0 "$?" "$awake caffeinate status"
+  if [ "$awake" = yes ]; then
+    for ((retry=0; retry<50; retry++)); do
+      [ -f "$caflog" ] && break
+      sleep .02
+    done
+    assert_eq "-is -w $build_pid" "$(cat "$caflog")" 'caffeinate arguments and script PID, exactly once'
+  fi
+done
+# Run directories vary; compare all other output bytes.
+sed "s|$home/runs/[^ /]*|RUN|g" "$caflog.yes" > "$caflog.normalized"
+sed "s|$home/runs/[^ /]*|RUN|g" "$caflog.no" > "$caflog.other"
+assert_eq "$(cat "$caflog.normalized")" "$(cat "$caflog.other")" 'sleep guard preserves output'
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

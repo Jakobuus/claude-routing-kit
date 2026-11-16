@@ -393,7 +393,7 @@ for ag in codex gemini; do
 done
 # If the undo itself fails, say where the original is saved (one line) and keep it.
 s=$(mktmp); printf '{"x":1}\n' > "$s/hooks.json"; printf 'My rules\n' > "$s/AGENTS.md"; cp "$s/hooks.json" "$s/h.orig"
-out=$(env KIT_TEST_MODE=routing-kit-tests KIT_TEST_FAIL_APPLY=2 KIT_TEST_FAIL_RESTORE=1 "$KI" --agent codex --home "$s" 2>&1); code=$?
+out=$(env TMPDIR="$(mktmp)" KIT_TEST_MODE=routing-kit-tests KIT_TEST_FAIL_APPLY=2 KIT_TEST_FAIL_RESTORE=1 "$KI" --agent codex --home "$s" 2>&1); code=$?
 [ "$code" -ne 0 ] && pass || fail "failed undo reported success"
 assert_eq 1 "$(printf '%s\n' "$out" | grep -c .)" "failed undo: one line"
 assert_contains "$out" "saved at" "failed undo names the snapshot"

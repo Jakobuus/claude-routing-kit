@@ -190,7 +190,7 @@ cleanup() {
   wait "$GATE_PID" 2>/dev/null
   wait "$UPSTREAM_PID" 2>/dev/null
 }
-trap cleanup EXIT
+trap 'cleanup; _mktmp_cleanup' EXIT
 
 # --- test: key never on the gate's argv (ps -o args) ------------------------
 ps_out=$(ps -o args= -p "$GATE_PID" 2>/dev/null)

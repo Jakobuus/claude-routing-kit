@@ -660,5 +660,14 @@ ln -s "$ext" "$og/wt/dirlink"
 out=$(bash -c '. "$1"; run_build_patch "$2"; echo "exit=$?"' _ "$EXPORT_SH" "$og/wt" 2>&1)
 assert_eq "exit=0" "$out" "a git with --attr-source allows symlinks to directories"
 
+# Starting an export sweeps only old staging directories.
+home=$(mktmp)
+src=$(mk_src_repo)
+mkdir -p "$home/scratch/kit-build-git.old" "$home/scratch/kit-build-git.fresh"
+touch -t 200001010000 "$home/scratch/kit-build-git.old"
+env ROUTING_KIT_HOME="$home" bash -c '. "$1"; run_export "$2" sweep >/dev/null' _ "$EXPORT_SH" "$src"
+[ ! -e "$home/scratch/kit-build-git.old" ] && pass || fail 'old scratch survived build start'
+[ -d "$home/scratch/kit-build-git.fresh" ] && pass || fail 'fresh scratch swept'
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

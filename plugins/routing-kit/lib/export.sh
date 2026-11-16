@@ -277,55 +277,129 @@ run_build_patch() {
 
 # Gemini creates its staging repository only after agy and its process group
 # have exited. Nothing from the agent's .git or the old git.pristine is used.
-run_build_patch_gemini() {
+run_build_patch_fresh() {
   local worktree="$1" source="$2" base="$3" patch
   patch="$(dirname "$worktree")/build.patch"
   rm -f "$patch"
   if (
-    local scratch attr old_git filters filter_status
-    scratch=$(mktemp -d "${TMPDIR:-/tmp}/kit-gemini-git.XXXXXX") || exit 4
-    trap 'rm -rf "$scratch"' EXIT
+    local scratch attr old_git drivers key
+    drivers=()
+    mkdir -p "$KIT_HOME/scratch" || exit 4
+    scratch=''
+    trap '[ -z "$scratch" ] || rm -rf "$scratch"' EXIT
+    trap 'exit 4' HUP INT TERM
+    scratch=$(mktemp -d "$KIT_HOME/scratch/kit-build-git.XXXXXX") || exit 4
+    printf '%s\n' "$$" > "$scratch/owner.pid"
     chmod 700 "$scratch" || exit 4
     mkdir "$scratch/home" || exit 4
     # The index, home, configuration and object store are all new. The clone
     # has no checkout, so source attributes and filters cannot run here.
-    gemini_git() {
+    staging_git() {
       env -i PATH=/usr/bin:/bin HOME="$scratch/home" \
         GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 \
         GIT_NO_REPLACE_OBJECTS=1 GIT_INDEX_FILE="$scratch/index" \
-        git -c core.hooksPath=/dev/null -c core.fsmonitor=false \
+        git ${drivers[@]+"${drivers[@]}"} -c core.hooksPath=/dev/null -c core.fsmonitor=false \
           -c core.attributesFile=/dev/null "$@"
     }
-    gemini_git clone --template= --no-local --no-checkout --no-hardlinks \
-      "$source" "$scratch/git" >/dev/null 2>&1 || exit 4
-    gemini_git -C "$scratch/git" cat-file -e "$base^{commit}" || exit 4
-    # A fresh clone should have no filter drivers. Refuse an unexpected one
-    # rather than allowing its clean command to run during add.
-    filters=$(gemini_git -C "$scratch/git" config --local --name-only \
-      --get-regexp '^filter\..*\.(clean|process)$' 2>/dev/null)
-    filter_status=$?
-    [ "$filter_status" -eq 1 ] || exit 4
-    [ -z "$filters" ] || exit 4
+    staging_git clone --template= --depth 1 --single-branch --no-local --no-checkout --no-hardlinks \
+      "file://$source" "$scratch/git" >/dev/null 2>&1 || exit 4
+    staging_git -C "$scratch/git" cat-file -e "$base^{commit}" || exit 4
+    while IFS= read -r key; do
+      [ -n "$key" ] && drivers=(${drivers[@]+"${drivers[@]}"} -c "$key=")
+    done < <(staging_git -C "$scratch/git" config --local --name-only \
+      --get-regexp '^(filter|diff|merge)\.' 2>/dev/null)
     rm -f "$scratch/git/.git/info/attributes" || exit 4
     [ ! -e "$scratch/git/.git/info/attributes" ] || exit 4
     attr=()
     old_git=1
-    if gemini_git --attr-source="$base" -C "$scratch/git" rev-parse "$base" >/dev/null 2>&1; then
+    if staging_git --attr-source="$base" -C "$scratch/git" rev-parse "$base" >/dev/null 2>&1; then
       attr=(--attr-source="$base")
       old_git=0
     fi
+    kit_python3 - "$worktree" "$scratch/wt" <<'SNAPSHOT'
+import os, stat, sys
+source, dest = sys.argv[1:]
+maximum = os.environ.get('ROUTING_KIT_MAX_GROWTH_MB', '2048')
+if not maximum or any(c not in '0123456789' for c in maximum):
+    maximum = '2048'
+used = 0
+with open(os.path.join(os.path.dirname(source), 'wt-size.kb')) as baseline:
+    limit = int(baseline.read().strip()) * 1024 + int(maximum) * 1024 * 1024
+def charge(size):
+    global used
+    used += size
+    if used > limit:
+        raise ValueError('it grew by more than %s MB' % maximum)
+def copy_tree(fd, dst, root=False):
+    os.mkdir(dst, 0o700)
+    with os.scandir(fd) as entries:
+        for entry in entries:
+            name = entry.name
+            if root and name == '.git':
+                continue
+            mode = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            reason = None
+            if name.lower() == '.git':
+                reason = 'a nested git repository or submodule'
+            elif not (stat.S_ISREG(mode.st_mode) or stat.S_ISDIR(mode.st_mode) or stat.S_ISLNK(mode.st_mode)):
+                reason = 'a FIFO, socket or device file'
+            elif stat.S_ISREG(mode.st_mode) and mode.st_nlink > 1:
+                reason = 'a file with more than one hard link'
+            if reason:
+                raise ValueError('%s (%s)' % (reason, name))
+            target = os.path.join(dst, name)
+            if stat.S_ISLNK(mode.st_mode):
+                charge(mode.st_size)
+                os.symlink(os.readlink(name, dir_fd=fd), target)
+            elif stat.S_ISDIR(mode.st_mode):
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                try:
+                    copy_tree(child, target)
+                finally:
+                    os.close(child)
+            else:
+                child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                with os.fdopen(child, 'rb') as reader:
+                    actual = os.fstat(reader.fileno())
+                    if not stat.S_ISREG(actual.st_mode):
+                        raise ValueError('a FIFO, socket or device file (%s)' % name)
+                    if actual.st_nlink != 1:
+                        raise ValueError('a file with more than one hard link (%s)' % name)
+                    charge(actual.st_size)
+                    remaining = actual.st_size
+                    with open(target, 'wb') as writer:
+                        while remaining:
+                            data = reader.read(min(remaining, 1024 * 1024))
+                            if not data:
+                                break
+                            writer.write(data)
+                            remaining -= len(data)
+                        os.fchmod(writer.fileno(), stat.S_IMODE(actual.st_mode))
+try:
+    fd = os.open(source, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        copy_tree(fd, dest, True)
+    finally:
+        os.close(fd)
+except (OSError, ValueError) as error:
+    print('refusing to stage the build in %s: %s' % (source, error), file=sys.stderr)
+    sys.exit(4)
+SNAPSHOT
+    [ "$?" -eq 0 ] || exit 4
+    cp "$(dirname "$worktree")/wt-size.kb" "$scratch/wt-size.kb" || exit 4
+    worktree="$scratch/wt"
     run_preflight_wt "$worktree" "$old_git" || exit 4
-    gemini_git -C "$scratch/git" read-tree "$base" || exit 4
-    gemini_git ${attr[@]+"${attr[@]}"} --git-dir="$scratch/git/.git" \
+    staging_git -C "$scratch/git" read-tree "$base" || exit 4
+    staging_git ${attr[@]+"${attr[@]}"} --git-dir="$scratch/git/.git" \
       --work-tree="$worktree" -c submodule.recurse=false add -A >/dev/null 2>&1 || exit 4
-    gemini_git ${attr[@]+"${attr[@]}"} --git-dir="$scratch/git/.git" \
+    staging_git ${attr[@]+"${attr[@]}"} --git-dir="$scratch/git/.git" \
       --work-tree="$worktree" diff --cached --binary --no-ext-diff \
       --no-textconv --ignore-submodules=all "$base" > "$patch" 2>/dev/null || exit 4
   ); then
     return 0
   fi
   rm -f "$patch"
-  echo 'could not safely stage the Gemini build patch' >&2
+  echo 'could not safely stage the build patch' >&2
   return 4
 }
 
@@ -388,6 +462,17 @@ run_cleanup() {
 # long live run from a dead one. Quiet, and never fails the caller.
 run_sweep_stale() {
   local d pid
+  if [ -d "$KIT_HOME/scratch" ]; then
+    find "$KIT_HOME/scratch" -mindepth 1 -maxdepth 1 -type d -name 'kit-build-git.*' -mmin +1440 2>/dev/null |
+      while IFS= read -r d; do
+        pid="$(cat "$d/owner.pid" 2>/dev/null)"
+        case "$pid" in
+          ''|*[!0-9]*) ;;
+          *) kill -0 "$pid" 2>/dev/null && continue ;;
+        esac
+        rm -rf "$d"
+      done
+  fi
   [ -d "$KIT_HOME/runs" ] || return 0
   find "$KIT_HOME/runs" -mindepth 1 -maxdepth 1 -type d -mmin +1440 2>/dev/null \
     | while IFS= read -r d; do

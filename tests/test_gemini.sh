@@ -58,7 +58,7 @@ if [ "$KIT_AGY_CASE" = env ]; then
   env | sort > "$KIT_AGY_MARKER"
   for n in 3 4 5 6 7 8 9; do [ -e "/dev/fd/$n" ] && echo "OPENFD $n" >> "$KIT_AGY_MARKER"; done
 fi
-if [ "$KIT_AGY_CASE" = capture ]; then printf '%s\n' "$*" > "$KIT_AGY_MARKER"; fi
+if [ "$KIT_AGY_CASE" = capture ]; then printf '%s\n' "$@" > "$KIT_AGY_MARKER"; fi
 printf 'new\n' > a.txt
 if [ "$KIT_AGY_CASE" = denied ]; then
   printf '{"status":"SUCCESS","response":"done","denied_actions":[{"action":"command","display_name":"Bash"}]}\n'
@@ -97,6 +97,12 @@ slash=$(mktmp)/slash.md
 printf '/edit a.txt\n' > "$slash"
 env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" KIT_AGY_CASE=capture KIT_AGY_MARKER="$capture" "$BIN" --repo "$repo" --name slash --brief "$slash" >/dev/null
 assert_contains "$(cat "$capture")" '--disable-slash-commands' 'slash commands disabled'
+assert_contains "$(cat "$capture")" '--dangerously-skip-permissions' 'Gemini receives the full-access flag'
+if grep -Fxq -- '--sandbox' "$capture"; then
+  fail 'sandbox flag reached Gemini'
+else
+  pass
+fi
 large=$(mktmp)/large.md
 head -c 102401 /dev/zero | tr '\0' x > "$large"
 out=$(env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" "$BIN" --repo "$repo" --name large --brief "$large" 2>&1)

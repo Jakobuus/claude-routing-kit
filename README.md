@@ -140,7 +140,7 @@ and may train on it. So the kit only ever runs them inside the macOS sandbox, th
 
 - They see a fresh copy of your committed code and nothing else: not your home folder, your keys,
   or files git ignores.
-The patch is built from a fresh clone of your repo and a private snapshot of the helper's output after the helper has stopped; if a helper can write outside its sandbox (for example into your source repo), the sandbox itself is broken and the kit cannot protect against that.
+The patch is built from a fresh clone of your repo and a private snapshot of the helper's output after the helper has stopped, so a helper's leftovers cannot change the patch. Codex and Gemini themselves run with full access to your machine under your own account; Kimi and GLM run locked in the Mac's sandbox.
 - The copy is deleted when the job ends. What you keep is a patch file (`build.patch`, in the
   job's run folder under `~/.config/routing-kit/runs`); apply it with `git apply`. Set
   `ROUTING_KIT_KEEP_RUNS=1` to keep the copy for debugging.
@@ -163,12 +163,14 @@ Linux has no equivalent the kit trusts yet, so Kimi and GLM are not offered ther
   repos; it makes no such promise for public ones.
 - Muse is not part of the kit: Muse tokens only work in the Muse app, not from a command line or
   API.
-- Gemini runs under your own Google account and login, with `--sandbox` (terminal restrictions)
-  and a scrubbed environment: your shell's tokens and keys are not passed on. The patch is built from a fresh clone of your repo and a private snapshot of the helper's output after the helper has stopped; if a helper can write outside its sandbox (for example into your source repo), the sandbox itself is broken and the kit cannot protect against that. That is not a jail: in a
-  test it refused a shell write to the home folder, but it can still reach whatever your login
-  can. Never use `--dangerously-skip-permissions`. Check denied actions and review its patch. On
-  Linux, if a Gemini build reports that agy is not signed in, run it with `KIT_AGY_ALLOW_DBUS=1`,
-  which lets agy reach the desktop keyring.
+- Codex runs without a sandbox or approval prompts, with
+  `--dangerously-bypass-approvals-and-sandbox`.
+- Gemini runs under your own Google account and login, without a sandbox or permission prompts,
+  with `--dangerously-skip-permissions`. Its environment is scrubbed: your shell's tokens and keys
+  are not passed on. Codex and Gemini builds use fresh clones, and patches come from private
+  snapshots taken after the helpers stop. Review their patches. On Linux, if a Gemini build
+  reports that agy is not signed in, run it with `KIT_AGY_ALLOW_DBUS=1`, which lets agy reach the
+  desktop keyring.
 - In 0.2.4, a profile without a `codex` key no longer loads the Codex rules, matching its routing table.
 - Google shuts Jules down on 31 Dec 2026. Jules users should move to Gemini; Jules support remains until then.
 

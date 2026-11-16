@@ -44,10 +44,10 @@ worded like an attack ("where can it escape?") can be refused by the adviser's s
 
 Run each one in the background. Always name the model.
 
-Codex (read-only, strongest model):
+Codex (strongest model, instructed to read only):
 
 ```bash
-codex exec -m "<Codex model from the Second opinion row>" -s read-only --skip-git-repo-check -C <repo> -o <dir>/codex.md \
+codex exec -m "<Codex model from the Second opinion row>" --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -C <repo> -o <dir>/codex.md \
   "Read <dir>/brief.md and answer it exactly as it asks. You may read files to check facts. Change nothing." \
   < /dev/null 2>&1 | tee <dir>/codex.log
 ```
@@ -60,10 +60,10 @@ claude -p --model "<Claude model from the Second opinion row>" --tools "Read,Gre
   < /dev/null > <dir>/claude.md 2> <dir>/claude.log
 ```
 
-Gemini from a Claude or Codex main session (sandboxed, in the repo folder):
+Gemini from a Claude or Codex main session (in the repo folder, instructed to read only):
 
 ```bash
-cd <repo> && agy --sandbox --model "<Gemini model from the Second opinion row>" --output-format json \
+cd <repo> && agy --dangerously-skip-permissions --model "<Gemini model from the Second opinion row>" --output-format json \
   -p "Read <dir>/brief.md and answer it exactly as it asks. Change nothing." \
   < /dev/null > <dir>/gemini.json
 ```

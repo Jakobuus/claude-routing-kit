@@ -48,9 +48,9 @@ _run_export_copy() {
       || kit_die 2 "could not rewrite packed-refs in the copy"
   fi
 
-  # A pristine copy of the scrubbed .git, kept outside wt where no build can
-  # write (Seatbelt grants wt/home/cfg/tmp only; Codex's workspace-write is its
-  # cwd, wt). Every git step after the build runs against THIS copy with
+  # A pristine copy of the scrubbed .git, kept outside wt. Codex and Gemini
+  # run without a sandbox and can write outside wt. Every git step after the
+  # build runs against THIS copy with
   # --git-dir/--work-tree (see run_build_patch) and never reads wt/.git, which
   # the build could have rewritten: config, index, objects, hooks, anything.
   # A real copy (cp -R), no hardlinks shared with wt/.git. Also record wt's

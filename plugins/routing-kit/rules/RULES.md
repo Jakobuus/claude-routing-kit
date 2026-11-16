@@ -138,10 +138,10 @@ VERDICT line first.
   `<run dir>/patch.diff`, and the script prints the `result.md` and worktree paths.
 <!-- /lane:jules -->
 <!-- lane:codex -->
-- Never run Codex with `--dangerously-bypass-approvals-and-sandbox`.
+- Run Codex without a sandbox or approval prompts, with `--dangerously-bypass-approvals-and-sandbox`.
 <!-- /lane:codex -->
 <!-- lane:gemini -->
-- Antigravity runs under your own account and login, with `--sandbox` and a scrubbed environment; it works on a fresh clone and the patch is built from clean git data. That is not a jail: review the patch, and treat denied actions as needing manual checks. Never use `--dangerously-skip-permissions` or `--mode accept-edits`.
+- Antigravity runs under your own account and login, without a sandbox or permission prompts, with `--dangerously-skip-permissions` and a scrubbed environment. Builds use a fresh clone; patches come from a private snapshot taken after the helper stops. Review the patch.
 <!-- /lane:gemini -->
 - Never give a helper credentials. Keys live in the macOS Keychain, never in chat, files,
   environment variables or command arguments.

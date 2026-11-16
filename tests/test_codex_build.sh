@@ -113,9 +113,8 @@ code=$?
 assert_eq 3 "$code" "missing codex exits 3"
 assert_contains "$out" "codex login" "missing-codex message mentions login"
 
-# --- successful run: fake codex gets -m gpt-6-sol -s workspace-write, never
-# the forbidden bypass flag; diff and run dir are printed; ledger gets one
-# line. ---------------------------------------------------------------------
+# --- successful run: fake codex gets the model and full-access flag;
+# diff and run dir are printed; ledger gets one line. --------------------
 src=$(mk_src_repo)
 brief=$(mk_brief)
 home=$(mktmp)
@@ -131,10 +130,10 @@ assert_contains "$out" "run dir:" "run dir is printed"
 
 argv=$(cat "$argv_log")
 assert_contains "$argv" "-m $(/usr/bin/jq -r .codex.build "$(dirname "$BIN")/../rules/models.json")" "fake codex received the default build model from models.json"
-assert_contains "$argv" "-s workspace-write" "fake codex received the sandbox flag"
-case "$argv" in
-  *"--dangerously-bypass-approvals-and-sandbox"*)
-    fail "forbidden flag reached codex" ;;
+assert_contains "$argv" "--dangerously-bypass-approvals-and-sandbox" "fake codex received the full-access flag"
+case " $argv " in
+  *" -s "*|*" --sandbox "*|*" --sandbox="*|*"workspace-write"*)
+    fail "sandbox option reached codex" ;;
   *) pass ;;
 esac
 

@@ -1,0 +1,40 @@
+{
+  "session_id": "session-4",
+  "transcript_path": "/HOME/.claude/projects/-REPO/session-4.jsonl",
+  "cwd": "/REPO",
+  "prompt_id": "prompt-1",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/REPO/notes.txt",
+    "old_string": "hello",
+    "new_string": "bye",
+    "replace_all": false
+  },
+  "tool_response": {
+    "filePath": "/REPO/notes.txt",
+    "oldString": "hello",
+    "newString": "bye",
+    "originalFile": "hello\n",
+    "structuredPatch": [
+      {
+        "oldStart": 1,
+        "oldLines": 1,
+        "newStart": 1,
+        "newLines": 1,
+        "lines": [
+          "-hello",
+          "+bye"
+        ]
+      }
+    ],
+    "userModified": false,
+    "replaceAll": false
+  },
+  "tool_use_id": "toolu-5",
+  "duration_ms": 1
+}

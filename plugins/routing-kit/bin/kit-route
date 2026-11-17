@@ -1,0 +1,6 @@
+#!/bin/bash
+set -u
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$SCRIPT_DIR/kit-common"
+kit_require_supported
+kit_python3 "$SCRIPT_DIR/../lib/route.py" "$@"

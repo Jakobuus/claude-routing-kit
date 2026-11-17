@@ -1,0 +1,21 @@
+[
+  {
+    "job": "images",
+    "label": "Images",
+    "match": [
+      "portrait"
+    ],
+    "options": [
+      {
+        "name": "Private painter",
+        "product": "local",
+        "how": "Private tool",
+        "rank": 1,
+        "price_month_usd": null,
+        "who": "agent"
+      }
+    ],
+    "best_overall": "Private painter",
+    "note": "Private image note."
+  }
+]

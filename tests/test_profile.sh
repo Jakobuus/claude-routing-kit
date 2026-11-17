@@ -176,5 +176,31 @@ assert_exit 2 "validate refuses main_agent gemini with gemini none" -- env ROUTI
 printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"none"}\n' > "$d2/profile.json"
 assert_exit 0 "validate passes with main_agent absent" -- env ROUTING_KIT_HOME="$d2" "$KP" validate
 
+# --- 0.4: skills (optional list of strings) ----------------------------------
+printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"none","skills":["/tmp/skill-a","/tmp/skill-b"]}\n' > "$d2/profile.json"
+assert_exit 0 "validate passes with skills as list of strings" -- env ROUTING_KIT_HOME="$d2" "$KP" validate
+printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"none","skills":[123]}\n' > "$d2/profile.json"
+assert_exit 2 "validate refuses non-string entry in skills" -- env ROUTING_KIT_HOME="$d2" "$KP" validate
+
+
+d=$(mktmp)
+env ROUTING_KIT_HOME="$d" "$KP" set claude_plan pro
+for value in true false '{}' '{"destructive":true}' '{"owner_checkout":false}' '{"destructive":false,"owner_checkout":true}'; do
+  assert_exit 0 "set blocks $value" -- env ROUTING_KIT_HOME="$d" "$KP" set blocks "$value"
+  assert_eq "$value" "$(jq -c .blocks "$d/profile.json")" "blocks stored as JSON"
+  assert_exit 0 "validate blocks $value" -- env ROUTING_KIT_HOME="$d" "$KP" validate
+done
+for value in null '[]' '"true"' '{"destructive":1}' '{"owner_checkout":null}'; do
+  before=$(cat "$d/profile.json")
+  assert_exit 2 "reject blocks $value" -- env ROUTING_KIT_HOME="$d" "$KP" set blocks "$value"
+  assert_eq "$before" "$(cat "$d/profile.json")" "invalid blocks leaves file unchanged"
+  jq --argjson v "$value" '.blocks=$v' "$d/profile.json" > "$d/invalid"
+  cp "$d/invalid" "$d/profile.json"
+  assert_exit 2 "validate rejects blocks $value" -- env ROUTING_KIT_HOME="$d" "$KP" validate
+done
+assert_exit 0 "owner name is accepted" -- env ROUTING_KIT_HOME="$d2" "$KP" set owner_name Alex
+printf '{"version":1,"claude_plan":"pro","owner_name":12}\n' > "$d2/profile.json"
+assert_exit 2 "owner name must be a string" -- env ROUTING_KIT_HOME="$d2" "$KP" validate
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

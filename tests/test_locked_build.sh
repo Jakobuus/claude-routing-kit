@@ -533,6 +533,7 @@ if [ -z "$run_dir" ]; then
   fail "could not find the run8 run dir"
 else
   env_dump="$run_dir/wt/.fake-claude-env-dump"
+  assert_contains "$(cat "$env_dump")" "KIT_ROLE=worker" "locked worker role"
   if [ -f "$env_dump" ]; then
     envtext=$(cat "$env_dump")
     assert_contains "$envtext" "ANTHROPIC_BASE_URL=http://127.0.0.1:" "fake claude saw a loopback ANTHROPIC_BASE_URL"
@@ -555,7 +556,7 @@ else
     # `env -i .../env ...` and the shell itself always add on top (PWD,
     # SHLVL, _) -- nothing else. A dropped env -i, or a stray extra
     # variable (e.g. a leaked host var), would add a key outside this set.
-    allowed_keys="HOME TMPDIR CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL PATH DISABLE_TELEMETRY DISABLE_ERROR_REPORTING DISABLE_AUTOUPDATER PWD SHLVL _"
+    allowed_keys="KIT_ROLE HOME TMPDIR CLAUDE_CONFIG_DIR CLAUDE_CODE_TMPDIR ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL PATH DISABLE_TELEMETRY DISABLE_ERROR_REPORTING DISABLE_AUTOUPDATER PWD SHLVL _"
     extra_keys=""
     while IFS='=' read -r k _v; do
       [ -n "$k" ] || continue

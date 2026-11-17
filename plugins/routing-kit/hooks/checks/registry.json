@@ -1,0 +1,63 @@
+{
+  "SessionStart": [
+    {
+      "check": "messages",
+      "timeout_s": 2
+    }
+  ],
+  "UserPromptSubmit": [
+    {
+      "check": "finish",
+      "timeout_s": 2
+    },
+    {
+      "check": "media",
+      "timeout_s": 2
+    },
+    {
+      "check": "messages",
+      "timeout_s": 2
+    }
+  ],
+  "PreInvocation": [
+    {
+      "check": "finish",
+      "timeout_s": 2
+    },
+    {
+      "check": "media",
+      "timeout_s": 2
+    },
+    {
+      "check": "messages",
+      "timeout_s": 2
+    }
+  ],
+  "PreModelRequest": [],
+  "PreToolUse": [
+    {
+      "check": "guard_destructive",
+      "timeout_s": 2
+    },
+    {
+      "check": "guard_owner_checkout",
+      "timeout_s": 2
+    },
+    {
+      "check": "delegation",
+      "timeout_s": 2
+    }
+  ],
+  "PostToolUse": [
+    {
+      "check": "messages",
+      "timeout_s": 2
+    }
+  ],
+  "Stop": [
+    {
+      "check": "finish",
+      "timeout_s": 60
+    }
+  ]
+}

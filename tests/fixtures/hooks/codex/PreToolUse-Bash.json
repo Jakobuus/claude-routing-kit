@@ -1,0 +1,14 @@
+{
+  "session_id": "session-5",
+  "turn_id": "turn-1",
+  "transcript_path": "/HOME/.codex/sessions/2026/01/01/rollout-2026-01-01T00-00-00-session-5.jsonl",
+  "cwd": "/REPO",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "ls"
+  },
+  "tool_use_id": "toolu-6"
+}

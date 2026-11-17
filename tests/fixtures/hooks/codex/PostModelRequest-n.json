@@ -1,0 +1,18 @@
+{
+  "session_id": "session-5",
+  "turn_id": "turn-1",
+  "cwd": "/REPO",
+  "transcript_path": "/HOME/.codex/sessions/2026/01/01/rollout-2026-01-01T00-00-00-session-5.jsonl",
+  "model": "gpt-6-luna",
+  "hook_event_name": "PostModelRequest",
+  "status": "completed",
+  "error": null,
+  "token_usage": {
+    "input_tokens": 17849,
+    "cached_input_tokens": 12544,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 60,
+    "reasoning_output_tokens": 0,
+    "total_tokens": 17909
+  }
+}

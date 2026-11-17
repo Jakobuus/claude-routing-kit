@@ -3,6 +3,27 @@
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 PLUGIN_ROOT="$REPO_ROOT/plugins/routing-kit"
 HOOK="$PLUGIN_ROOT/hooks/session-start"
+cd "$REPO_ROOT"
+export HOME=$(mktmp)
+export CODEX_HOME="$HOME/.codex"
+
+# A hand-run hook must exit while its terminal input remains open.
+if python3 - "$HOOK" <<'PYTTY'
+import os, pty, subprocess, sys
+master, slave = pty.openpty()
+try:
+    child = subprocess.Popen([sys.argv[1]], stdin=slave, stdout=subprocess.DEVNULL)
+    try:
+        child.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
+        sys.exit(1)
+finally:
+    os.close(master)
+    os.close(slave)
+PYTTY
+then pass; else fail "hand-run hook blocks on terminal stdin"; fi
 
 mkprofile() {
   # mkprofile FILE claude_plan codex jules kimi glm paseo
@@ -19,6 +40,19 @@ code=$?
 assert_eq 0 "$code" "valid profile exits 0"
 assert_contains "$out" "# Rules" "valid profile output has # Rules"
 assert_contains "$out" "## Your routing table" "valid profile output has routing table heading"
+case "$out" in *"## You are a worker"*) fail "default session is a lead";; *) pass;; esac
+lead=$(KIT_ROLE=lead ROUTING_KIT_HOME="$d/.config/routing-kit" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
+assert_eq "$out" "$lead" "explicit lead matches default"
+worker=$(KIT_ROLE=worker "$HOOK")
+expected=$(cat <<'WORKER'
+## You are a worker
+- Stay inside the task in your brief. Don't refactor code you weren't asked to touch.
+- Run the project's tests (or the check named in the brief) before you finish.
+- Don't commit, push, or change git config.
+- End with three short lists: what you did, what you didn't do, what you couldn't check.
+WORKER
+)
+assert_eq "$expected" "$worker" "worker prints only its section"
 for lane in Codex Jules Kimi GLM; do
   lower=$(printf '%s' "$lane" | tr '[:upper:]' '[:lower:]')
   case "$out" in *"$lane"*|*"$lower"*) fail "disabled $lane appears in rules";; *) pass;; esac
@@ -358,7 +392,7 @@ assert_contains "$out" "## Your routing table" "a little over budget: table kept
 [ $(printf '%s' "$out" | wc -c | tr -d ' ') -le "$BUDGET" ] && pass || fail "a little over budget: still over"
 out=$(run_pad $(( over + 700 )))
 case "$out" in *"## Costly tools"*|*"## Long jobs"*) fail "well over budget: both sections should be dropped";; *) pass;; esac
-assert_contains "$out" "## Advisers" "well over budget: other sections kept"
+[ $(printf '%s' "$out" | wc -c | tr -d ' ') -le "$BUDGET" ] && pass || fail "well over budget: output over"
 assert_contains "$out" "## Your routing table" "well over budget: table kept"
 case "$out" in *"rules did not load"*) fail "well over budget: repair message";; *) pass;; esac
 # Last resort: still too big after both drops.
@@ -513,6 +547,98 @@ $kd/routing-kit
 pull" "$got" "repair line: path '$nm' survives a shell"
   [ ! -e "$q/PWNED" ] && [ ! -e "$kd/PWNED" ] && pass || fail "repair line ran a command from the path '$nm'"
 done
+
+# Synced rules suppress the fallback, while the table remains.
+shome=$(mktmp)
+mkdir -p "$shome/.claude" "$shome/kit"
+printf '%s\n' '{"version":1,"claude_plan":"pro","codex":"none","gemini":"none"}' > "$shome/kit/profile.json"
+printf '%s\n' '<!-- routing-kit:rules:start -->' 'rules' '<!-- routing-kit:rules:end -->' > "$shome/.claude/CLAUDE.md"
+sout=$(env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" KIT_MAIN_AGENT=claude "$REPO_ROOT/plugins/routing-kit/hooks/session-start")
+assert_contains "$sout" '## Your routing table' 'synced session has table'
+case "$sout" in *'## Costly tools'*) fail 'synced session repeats rules';; *) pass;; esac
+
+env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" KIT_BOARD_NAME=claude "$PLUGIN_ROOT/bin/kit-board" post --repo "$REPO_ROOT" hello >/dev/null
+env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" KIT_BOARD_NAME=claude "$PLUGIN_ROOT/bin/kit-board" post --repo "$REPO_ROOT" --kind claim work >/dev/null
+sout=$(env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" KIT_BOARD_NAME=claude KIT_MAIN_AGENT=claude "$HOOK")
+assert_contains "$sout" 'Board: 1 open notes, 1 claims for this repo.' 'board summary'
+
+# --- Rules fix wave (G2c): only: blocks follow the reader; build-launch and adviser rules ---
+# Codex-led profile with Claude enabled. The Claude plugin's hook passes "claude" and must keep the
+# only:claude blocks while main:codex blocks still follow the profile; the bare hook (Codex) keeps only:codex.
+d=$(mktmp)
+printf '{"version":1,"claude_plan":"max5","codex":"plus","gemini":"none","jules":false,"kimi":false,"glm":false,"paseo":false,"main_agent":"codex"}\n' > "$d/profile.json"
+out=$(env KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-codex" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK" claude)
+assert_contains "$out" 'every subagent gets `model` and `effort`' "reader claude, profile main codex: subagent rule kept"
+assert_contains "$out" 'Use the `ask-advisers` skill.' "reader claude, profile main codex: adviser skill kept"
+assert_contains "$out" 'subagent builds it' "reader claude, profile main codex: private-data work goes to a subagent"
+assert_contains "$out" "gpt-6-astra (the main session)" "reader claude, profile main codex: main: blocks and table still follow the profile"
+case "$out" in *"Hardest builds"*|*"<!--"*) fail "reader claude, main codex: main:claude block or marker leaked";; *) pass;; esac
+bare=$(run_hook "$d")
+case "$bare" in *subagent*|*"Use the \`ask-advisers\` skill."*) fail "bare hook, main codex: Claude-only wording appears";; *) pass;; esac
+# The Antigravity adapter reads for Gemini whatever the profile's main agent says.
+printf '{"version":1,"claude_plan":"max5","codex":"plus","gemini":"pro","jules":false,"kimi":false,"glm":false,"paseo":false,"main_agent":"codex"}\n' > "$d/profile.json"
+got=$(env KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-codex" "$AGY")
+text=$(printf '%s' "$got" | jq -r '.injectSteps[0].systemMessage.systemMessage')
+case "$text" in *subagent*) fail "adapter, profile main codex: Claude subagent wording";; *) pass;; esac
+assert_contains "$text" 'One context: one helper call or none' "adapter, profile main codex: only:gemini block kept"
+# The Claude plugin's hooks.json names its reader.
+assert_eq 'hooks/session-start claude' "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$PLUGIN_ROOT/hooks/hooks.json" | sed 's|^.*/hooks/|hooks/|')" "hooks.json: the Claude plugin's session start passes claude"
+
+# Build-launch rule matches the real commands: effort goes on claude -p / paseo run / codex exec / agy -p;
+# the shipped build wrappers take --model only (or nothing, for Jules) and have no effort option.
+d=$(mktmp)
+all_profile "$d/profile.json" claude
+mkdir -p "$d/cache"; : > "$d/cache/agy-refresh.stamp"
+out=$(env KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-codex" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
+assert_contains "$out" '`kit-codex-build` takes `--model` only' "build rule: kit-codex-build takes --model only"
+assert_contains "$out" '`kit-gemini-build` takes `--model` only' "build rule: kit-gemini-build takes --model only"
+assert_contains "$out" '`kit-jules-build` takes no model or effort' "build rule: kit-jules-build takes neither"
+case "$out" in *"build-command launch"*) fail "build rule still asks for model and effort on every build command";; *) pass;; esac
+for b in kit-codex-build kit-gemini-build kit-jules-build locked-build; do
+  if grep -q -e '--effort' "$PLUGIN_ROOT/bin/$b"; then fail "$b has an effort option; the rules say it has none"; else pass; fi
+done
+for b in kit-codex-build kit-gemini-build; do grep -q -e '--model)' "$PLUGIN_ROOT/bin/$b" && pass || fail "$b has no --model option"; done
+grep -q -e '--model' "$PLUGIN_ROOT/bin/kit-jules-build" && fail "kit-jules-build takes --model; the rules say it takes none" || pass
+# Adviser condition: the second adviser only when the table's row names one.
+assert_contains "$out" "also the row's second adviser, when it names one" "advisers: second adviser only when one exists"
+
+# G2e: another agent's synced file cannot suppress the reader's rules.
+sout=$(env HOME="$shome" CODEX_HOME="$shome/codex" ROUTING_KIT_HOME="$shome/kit" "$HOOK" codex)
+assert_contains "$sout" '## Costly tools' 'codex ignores synced Claude instructions'
+env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" KIT_BOARD_FAMILY=claude KIT_BOARD_SESSION=s1 "$PLUGIN_ROOT/bin/kit-board" read >/dev/null
+sout=$(printf '{"session_id":"s1"}' | env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" "$HOOK" claude)
+assert_contains "$sout" 'Board: 0 open notes, 1 claims' 'read notes no longer counted'
+env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" KIT_BOARD_NAME=claude "$PLUGIN_ROOT/bin/kit-board" post --repo /another/repo --to "repo:$REPO_ROOT" cross-repo >/dev/null
+sout=$(printf '{"session_id":"s1"}' | env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" "$HOOK" claude)
+assert_contains "$sout" 'Board: 1 open notes, 1 claims' 'repo-addressed cross-repo note counted'
+again=$(printf '{"session_id":"s1"}' | env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" "$HOOK" claude)
+assert_eq "$sout" "$again" 'session start never advances cursor'
+# B1: the event decides who reads, not an inherited KIT_BOARD_NAME / KIT_BOARD_SESSION.
+inh=$(printf '{"session_id":"s1"}' | env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" KIT_BOARD_NAME=intruder KIT_BOARD_SESSION=other "$HOOK" claude)
+assert_eq "$sout" "$inh" 'session start ignores an inherited KIT_BOARD_NAME and KIT_BOARD_SESSION'
+# B1 (F2): Antigravity runs hooks in ~/.gemini/config, not in the repo, and names the session
+# conversationId (shape recorded in tests/fixtures/hooks/agy/SessionStart-n.json). The board line comes
+# from the payload's cwd and conversationId.
+agy_payload=$(jq -c --arg cwd "$REPO_ROOT" '.cwd = $cwd | .conversationId = "conv-b1"' "$REPO_ROOT/tests/fixtures/hooks/agy/SessionStart-n.json")
+mkdir -p "$shome/elsewhere"
+cp "$shome/kit/profile.json" "$shome/profile.claude-only"
+printf '%s\n' '{"version":1,"claude_plan":"pro","codex":"none","gemini":"pro"}' > "$shome/kit/profile.json"
+agy_out=$( cd "$shome/elsewhere" && printf '%s' "$agy_payload" | env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" KIT_BOARD_NAME=intruder "$AGY")
+agy_text=$(printf '%s' "$agy_out" | jq -r '.injectSteps[0].systemMessage.systemMessage')
+assert_contains "$agy_text" 'Board: 2 open notes, 1 claims for this repo.' 'agy session start shows the board line (payload cwd, conversationId)'
+# Control: the same run without a cwd in the payload sits in the wrong folder and shows no line.
+nocwd=$( cd "$shome/elsewhere" && printf '%s' "$agy_payload" | jq -c 'del(.cwd)' | env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" "$AGY")
+case "$(printf '%s' "$nocwd" | jq -r '.injectSteps[0].systemMessage.systemMessage')" in *'Board:'*) fail 'no payload cwd: board line shown for the wrong folder';; *) pass;; esac
+# The conversation has its own cursor: after it reads the notes as its inferred self, they are not counted.
+env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" env -u KIT_BOARD_NAME ANTIGRAVITY_CONVERSATION_ID=conv-b1 "$PLUGIN_ROOT/bin/kit-board" read >/dev/null
+read_out=$( cd "$shome/elsewhere" && printf '%s' "$agy_payload" | env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" "$AGY")
+assert_contains "$(printf '%s' "$read_out" | jq -r '.injectSteps[0].systemMessage.systemMessage')" 'Board: 0 open notes, 1 claims' 'agy conversation that read the notes has none open (same name from the CLI and the hook)'
+cp "$shome/profile.claude-only" "$shome/kit/profile.json"
+# R2 regression
+mkdir -p "$HOME/worker-private/private"
+printf 'PRIVATE WORKER TEXT' > "$HOME/worker-private/private/worker.md"
+private_out=$(KIT_ROLE=worker KIT_HOME="$HOME/worker-private" "$HOOK")
+case "$private_out" in *'PRIVATE WORKER TEXT') pass;; *) fail 'worker private text missing';; esac
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

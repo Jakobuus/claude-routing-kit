@@ -343,6 +343,7 @@ esac
 # claimed this was set but the edit never landed (`grep` found it only in
 # this comment); wave 2 adds the real line below.
 jail_env=(
+  KIT_ROLE=worker
   "HOME=$run_home"
   "TMPDIR=$run_tmp"
   "CLAUDE_CONFIG_DIR=$run_cfg"

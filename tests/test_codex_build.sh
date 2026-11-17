@@ -28,6 +28,7 @@ mk_fake_codex_bin() {
   cat > "$bindir/codex" <<EOF
 #!/bin/bash
 printf '%s\n' "\$*" >> "$argv_log"
+printf '%s\n' "\$KIT_ROLE" > "$argv_log.role"
 cat >/dev/null
 dir=""
 prev=""
@@ -128,6 +129,7 @@ assert_eq 0 "$code" "successful codex build exits 0"
 assert_contains "$out" "hello.txt" "diff shows the new file"
 assert_contains "$out" "run dir:" "run dir is printed"
 
+assert_eq worker "$(cat "$argv_log.role")" "Codex worker role"
 argv=$(cat "$argv_log")
 assert_contains "$argv" "-m $(/usr/bin/jq -r .codex.build "$(dirname "$BIN")/../rules/models.json")" "fake codex received the default build model from models.json"
 assert_contains "$argv" "--dangerously-bypass-approvals-and-sandbox" "fake codex received the full-access flag"

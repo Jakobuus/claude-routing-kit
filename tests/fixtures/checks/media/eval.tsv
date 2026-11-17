@@ -1,0 +1,168 @@
+# 5.4b-media-sol (79ef18e): coding prompts
+Optimize image decoding in the Rust renderer	none
+Fix image caching in nginx	none
+Investigate why the SVG logo disappears after hydration	none
+Support captions in the HTML5 video player	none
+Remove the deprecated TTS service from the build	none
+Implement lazy loading for image elements	none
+Fix the poster attribute in our Vue player	none
+Add translation strings to locales/en.yml	none
+Document OCR CLI flags in the README	none
+Upgrade the music streaming SDK to its latest release	none
+Benchmark PNG to SVG conversion in the worker	none
+Generate TypeScript types for the image upload response	none
+Change the transparent background CSS to white	none
+Enable subtitles in the HLS playback pipeline	none
+Migrate the image optimizer from webpack to Vite	none
+Fix the image upload handler	none
+Write a test for the logo component	none
+Update the OCR endpoint error handling	none
+Refactor the translation module	none
+The music player tests are failing	none
+# 5.4b-media-sol: media prompts (Python class / React tutorial carry explicit code words, so none)
+Generate a video of a sailboat at sunset	text-to-video
+Remove the background from this photo	background-removal
+Edit this image to make the sky blue	image-editing
+Generate an image of a German shepherd	images
+Design a logo for a music app	logo-svg
+Translate this interview transcription into German	translation
+Translate these subtitles into French	translation
+Make a poster for our Spanish class	images
+Write a voiceover for a Python class introduction	none
+Add a transparent background to this image for the React tutorial	none
+# 5.3d-media-sol (43a71ca): coding prompts
+Add a logo button in Svelte.	none
+Make the video controls keyboard accessible.	none
+Translate this C# routine into Kotlin.	none
+Convert PNG to SVG using ImageMagick.	none
+Add a background removal toggle in SwiftUI.	none
+Create a speech to text adapter in C++.	none
+Fix the text to speech integration in .NET.	none
+Change the transparent background on the canvas element.	none
+Write an OCR wrapper in Ruby.	none
+Generate an image thumbnailer in Go.	none
+Add image compression to the upload handler.	none
+Fix the translation endpoint timeout.	none
+Write a voiceover queue worker in Python.	none
+Update the logo component in React.	none
+Create a video transcoding pipeline.	none
+Convert the OCR response schema to JSON.	none
+Generate a picture preview in src/Preview.tsx.	none
+Add image lazy loading to the frontend.	none
+Make subtitles selectable in the player.	none
+Write tests for the audio transcription API.	none
+# 5.3d-media-sol: media prompts
+Draw a watercolor picture of a tram crossing a snowy bridge.	images
+Create an image for an album about background music.	images
+Edit this photo so the red jacket becomes green.	image-editing
+Design a logo shaped like a whale for a podcast.	logo-svg
+Create a vector logo for a bicycle repair shop.	logo-svg
+Produce a video showing soap bubbles drifting over a meadow.	text-to-video
+Make a video about speech to text.	text-to-video
+Generate a voiceover for this welcome message.	voiceover
+Read the attached paragraph aloud in a reassuring tone.	voiceover
+Transcribe the attached audio file and identify each speaker.	transcription
+Please transcribe this voicemail recording.	transcription
+Run OCR on the attached restaurant menu.	ocr
+Extract the text from this scanned invoice.	ocr
+Translate this birthday invitation into Italian.	translation
+Translate the phrase on this sign into Korean.	translation
+Remove the background around this ceramic mug.	background-removal
+Isolate the subject in this portrait.	background-removal
+Watch this video and describe the animal's movements.	video-understanding
+Summarize the attached video in three sentences.	video-understanding
+Tell me what happens in this video of a crowded station.	video-understanding
+# fw4-opus (4059cd9): coding prompts
+Make the logo link back to the homepage	none
+Make the music toggle remember its state between visits	none
+Write a cron job that transcribes new voicemails overnight	none
+Make the voiceover toggle persist in localStorage	none
+Create a Flask route to translate incoming messages	none
+Make the image carousel swipeable on touch devices	none
+Generate the image table migration	none
+Change the avatar video aspect ratio in the profile card	none
+Make the subtitles toggle work on iOS	none
+Make the background music fade out when the tab is hidden	none
+Write a Django view that translates product descriptions with DeepL	none
+Give the wireframe page a dark mode toggle	none
+Why does the poster image fail to load on Safari?	none
+Create a Celery task that converts PNG to SVG on upload	none
+Draw the waveform of the song on a HTML canvas	none
+# fw4-opus: media prompts (the review names only these three)
+Paint me a watercolor of a lighthouse at dusk	images
+Turn this photo into a short video clip	image-to-video
+Give me a voiceover for this product demo script	voiceover
+# fw5-opus (335b6fa): coding prompts
+Make the hero image load faster on slow connections	none
+Make the logo smaller on mobile	none
+Make the video autoplay muted on mobile	none
+Generate captions automatically when a user posts a video on our site	none
+Make the song list sortable by artist	none
+Make the background music volume slider work in Firefox	none
+Make the subtitles sync with the video in Firefox	none
+Translate the onboarding screens with i18next	none
+Add a Whisper step to our Airflow DAG to transcribe sales calls	none
+Make the image gallery show three columns on wide screens	none
+Make the logo spin on hover	none
+Create a video model in Prisma with title and duration fields	none
+Draw the poster preview with Pillow when an admin saves an event	none
+Make the illustration in the empty state respect the user's reduced motion setting	none
+Write a Postgres trigger that updates the song count	none
+# fw5-opus: media prompts
+Design a business card for my consulting practice	layouts
+Make a title card for my YouTube video intro	text-to-video
+Make a poster for the job fair next week	images
+Design a landing page mockup for my pottery studio	ui-mockups
+Make a flyer for the table tennis tournament	layouts
+Create a banner design for my Chrome extension store listing	layouts
+Generate a jingle for my radio ad	music
+Turn this blog post into narration with a British voice	voiceover
+Create a cover image for my podcast	images
+Make a short video of a cat playing piano	text-to-video
+Translate my menu into Spanish	translation
+Remove the background from my product shot	background-removal
+Upscale this old family photo	upscaling
+Make a 3D model of a coffee mug	3d-mesh
+Write subtitles for my wedding video	transcription
+Watch this video and tell me what happens in it	video-understanding
+Translate this email into German	translation
+Run OCR on this receipt	ocr
+# own prompts, phrased the way people ask
+Can you make me a logo for my bakery? It's called Sunrise Loaves	logo-svg
+I need a poster for our school's spring concert	images
+Generate a photorealistic image of a lighthouse in a storm	images
+Can I get a transcription of this audio file?	transcription
+Please add subtitles to my cooking video	transcription
+Compose some calm background music for my meditation app promo	music
+I want a voiceover for my product demo with a warm female voice	voiceover
+Read this article out loud to me	voiceover
+Get the text out of this scanned PDF	ocr
+Translate this contract from German into English	translation
+Can you cut the background out of this headshot?	background-removal
+Upscale this low-resolution photo to 4K	upscaling
+Make me a 3D model of a chess knight I can print	3d-mesh
+Summarize what happens in this video clip	video-understanding
+Animate this photo of my grandmother so she smiles	image-to-video
+Make a 15 second video ad for my sneaker brand	text-to-video
+Clone my voice from these samples	voice-cloning
+Convert this PNG logo into a scalable vector	vectorising
+Design a brochure for our dental clinic	layouts
+Create a talking head avatar that presents my sales pitch	avatars
+Listen to this call recording and tell me what the customer complained about	audio-understanding
+Mock up a website design for a yoga studio	ui-mockups
+Edit this photo to remove the person on the left	image-editing
+Watch clip.mp4 and describe it	video-understanding
+# kit-0.4 media fix wave (Opus 46e7c30 finding 5; Sol 4155b37 findings 1-2)
+Make a short video to summarize our quarterly results	text-to-video
+Generate a product video of a luxury watch rotating on a table	text-to-video
+Make a video showing what happens when you mix baking soda and vinegar	text-to-video
+Fix image loading in PHP	none
+Fix image loading in Lua	none
+Update the image loader in src/media	none
+Resize the images in lib/uploads	none
+Summarize this video for me	video-understanding
+What happens in this video?	video-understanding
+Summarize our quarterly results in a short video	text-to-video
+Describe our new app in a 30 second video	text-to-video
+Make an explainer video for our client/partner onboarding	text-to-video
+Edit this photo for the docs/blog header	image-editing

@@ -72,6 +72,7 @@ else
 fi
 HOOK_CMD=$(kit_shell_quote "$HOOK_PATH")
 SESSION_CMD=$(kit_shell_quote "$PLUGIN_ROOT/hooks/session-start")
+[ "$AGENT" != codex ] || { HOOK_CMD="$HOOK_CMD codex"; SESSION_CMD="$SESSION_CMD codex"; }
 [ -x "$HOOK_PATH" ] || kit_die 2 "hook not found or not executable: $HOOK_PATH"
 
 BLOCK="$START

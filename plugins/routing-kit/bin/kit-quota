@@ -31,6 +31,13 @@ kit_require_supported
 kit_require_jq
 kit_require_python3
 
+case "${1:-}" in
+  resets) shift; exec python3 "$SCRIPT_DIR/../lib/quota_resets.py" "$KIT_HOME/resets.json" "$@" ;;
+  --pick)
+    [ "$#" = 2 ] || kit_die 2 'usage: kit-quota --pick <job>'
+    exec python3 "$SCRIPT_DIR/../lib/quota_pick.py" "$SCRIPT_DIR" "$2" ;;
+esac
+
 AS_JSON=0
 case "${1:-}" in
   '') ;;

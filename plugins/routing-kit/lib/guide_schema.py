@@ -179,6 +179,86 @@ class Checker(object):
         return list(enumerate(value))
 
     # -- sections ------------------------------------------------------------
+    def media(self, rows):
+        jobs = ("images image-editing logo-svg layouts text-to-video image-to-video "
+                "video-editing avatars 3d-code 3d-mesh usdz voiceover voice-cloning "
+                "transcription music ocr translation ui-mockups upscaling vectorising "
+                "background-removal deep-research video-understanding audio-understanding").split()
+        products = ("chatgpt", "google-ai-pro", "claude", "canva-connector",
+                    "figma-connector", "local")
+        seen = set()
+
+        def scan(path, value):
+            if isinstance(value, str) and "sandbox" in value.lower():
+                self.err(path, "contains sandbox")
+            elif isinstance(value, dict):
+                for k, v in value.items():
+                    scan(path + "." + k, k)
+                    scan(path + "." + k, v)
+            elif isinstance(value, list):
+                for i, v in enumerate(value):
+                    scan("%s[%d]" % (path, i), v)
+
+        for i, row in self.items("media", rows):
+            job = row.get("job") if isinstance(row, dict) else None
+            p = "media[%d](%s)" % (i, job)
+            scan(p, row)
+            if not self.keys(p, row, ("job", "label", "match", "options",
+                                      "best_overall", "note"), ()):
+                continue
+            if not isinstance(job, str) or job not in jobs:
+                self.err(p + ".job", "unknown job id")
+            elif job in seen:
+                self.err(p + ".job", "duplicate job id %r" % job)
+            else:
+                seen.add(job)
+            self.text(p + ".label", row.get("label"))
+            matches = row.get("match")
+            if not isinstance(matches, list) or not matches:
+                self.err(p + ".match", "must be a non-empty list of lowercase strings")
+            else:
+                for j, value in enumerate(matches):
+                    q = "%s.match[%d]" % (p, j)
+                    self.text(q, value)
+                    if isinstance(value, str) and value != value.lower():
+                        self.err(q, "must be lowercase")
+            self.text(p + ".note", row.get("note"), optional=True)
+            options = row.get("options")
+            if options == [] and not (isinstance(row.get("note"), str)
+                                      and row["note"].strip()):
+                self.err(p + ".options", "empty options require a non-empty note")
+            ranks = set()
+            names = []
+            for j, option in self.items(p + ".options", options):
+                q = "%s.options[%d]" % (p, j)
+                if not self.keys(q, option, ("name", "product", "price_month_usd",
+                                             "who", "how", "rank"), ()):
+                    continue
+                for k in ("name", "how"):
+                    self.text(q + "." + k, option.get(k))
+                names.append(option.get("name"))
+                product = option.get("product")
+                # A subscription name is a short plain name: this text reaches agents'
+                # prompts, so nothing that could carry instructions gets through.
+                if not isinstance(product, str) or not (
+                    product in products or re.match(
+                        r"subscription:[A-Za-z0-9][A-Za-z0-9 .+&'-]{0,40}\Z", product)
+                ):
+                    self.err(q + ".product", "must be an allowed product or subscription:<name>")
+                self.price(q + ".price_month_usd", option.get("price_month_usd"))
+                if option.get("who") not in ("agent", "owner"):
+                    self.err(q + ".who", "must be agent|owner")
+                rank = option.get("rank")
+                if isinstance(rank, bool) or not isinstance(rank, int) or rank < 1:
+                    self.err(q + ".rank", "must be an integer >= 1")
+                elif rank in ranks:
+                    self.err(q + ".rank", "duplicate rank")
+                else:
+                    ranks.add(rank)
+            best = row.get("best_overall")
+            if best is not None and (not isinstance(best, str) or best not in names):
+                self.err(p + ".best_overall", "must name an option or be null")
+
     def bottom_line(self, rows):
         for i, row in self.items("bottom_line", rows):
             p = "bottom_line[%d]" % i
@@ -297,7 +377,7 @@ class Checker(object):
 
 TOP_REQUIRED = ("version", "checked", "bottom_line", "models", "families", "reading_notes")
 TOP_OPTIONAL = ("summary", "headline_benches", "comparison_note", "best_at", "best_at_note",
-                "personalities_note")
+                "personalities_note", "media")
 
 
 def validate(data, domains):
@@ -316,6 +396,8 @@ def validate(data, domains):
     if "headline_benches" in data:
         for i, b in c.items("headline_benches", data["headline_benches"]):
             c.text("headline_benches[%d]" % i, b)
+    if "media" in data:
+        c.media(data["media"])
     if "bottom_line" in data:
         c.bottom_line(data["bottom_line"])
     if "models" in data:

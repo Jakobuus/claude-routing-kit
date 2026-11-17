@@ -30,6 +30,20 @@ Set up https://github.com/Jakobuus/claude-routing-kit for me
 - **What it needs.** One of the three agents on macOS, Linux, or Windows through WSL2. Everything
   else is optional.
 
+## What you get in 0.4
+
+Claude Code, Codex or Antigravity can lead (Antigravity as lead is not tested end to end yet). Setup asks what plans and models you have and which agent should lead. Claude is the default.
+
+`kit-sync all` shares rules, skills and hooks. Shared skills are the kit's own skills plus skill folders listed under `skills` in your profile. Edit `skills` and `products` by hand in `~/.config/routing-kit/profile.json`; `kit-route` uses `products` to find options for media and document jobs.
+
+`kit-sync repo PATH` moves a repo's rule files into one shared AGENTS.md and commits the change (undo with `git revert`). `kit-sync rules|skills|hooks --undo` (or `kit-sync all --undo`) takes out the kit's rules block, skill links and hook entries (and the Codex trust block it wrote at the end of config.toml, if it is still the last thing there). It never restores old copies. `kit-sync hooks` marks the kit's Codex hooks trusted in Codex's config.toml only after `kit-selftest --hooks` passes; a failed selftest removes the mark again. It leaves the `project_doc_max_bytes` line in Codex's config.toml; remove it by hand if you want. It refuses a rules block edited by hand unless you add `--force`.
+
+`kit-doctor` lists hand edits and missing pieces in what kit-sync wrote, rule files too big for an agent, new hook errors since the last check, and media jobs from the last 7 days with how many got a suggested route (it cannot tell whether the agent followed it). `kit-board` supports notes, claims and messages; inside Claude Code, Codex or Antigravity it knows which session you are from the agent's own session id (`kit-board whoami`). `KIT_BOARD_NAME` is for scripts outside an agent. A Claude session started from inside a Codex session is named as Codex. Owner quotes show as `<owner> says (quoted via …)`, with the profile's `owner_name` (`kit-profile set owner_name NAME`), or "the owner". Another agent's note is not the owner's approval. `kit-quota --pick "<row name from the routing table>"`, for example `kit-quota --pick "Read-only lookups"`, names the model in that row whose plan has the most room left this week.
+
+Setup offers two guards: one against destructive commands, and one that stops agents working in other repos from editing files in folders you name as your own (`kit-profile set owner_checkouts '["/path"]'`). Both are off unless you say yes; they are a seatbelt against agent mistakes, not a security boundary. Codex: `kit-sync hooks` runs the hooks selftest and, only if it passes, marks the kit hooks trusted in Codex (one marked block at the end of `$CODEX_HOME/config.toml`, by default `~/.codex/config.toml`), so they also run in `codex exec`. A failed selftest or `--undo` removes that block if it is still the exact last part of the file; otherwise kit-sync says so and you remove it by hand. If kit-sync prints a trust warning, check `/hooks` in Codex.
+
+Your private rules belong in `~/.config/routing-kit/private/rules.md` (or `$ROUTING_KIT_HOME/private/rules.md` if you set ROUTING_KIT_HOME). When migrating, move your text there by hand and empty the old file before running `kit-sync rules`. Run `kit-profile set kit_rules replace` only once the private file holds your full rules. The kit then keeps only its own board and media section and the routing table.
+
 ## What is new in 0.3
 
 - **A field guide.** The routing follows `plugins/routing-kit/guide/FIELD-GUIDE.md`: a guide to the
@@ -61,11 +75,11 @@ of November 2026). The kit builds it from their answers and loads it into every 
 <!-- example:start claude_plan=pro codex=plus gemini=none jules=false kimi=false glm=false main_agent=claude -->
 | Work | Use | Notes |
 |---|---|---|
-| Plans, architecture, judgment | Claude opus | medium, high for checks; big plans also get Codex gpt-6-astra advice |
+| Plans, architecture, judgment | Claude opus | medium, high for checks; big plans: ask Codex gpt-6-astra |
 | Features, bug fixes, tests | Codex gpt-6.1-sol · Claude sonnet | sonnet: medium or high, never above; pick by quota |
 | Review | Claude work → Codex gpt-6.1-sol, risky changes → gpt-6-astra; Codex work → Claude opus | the reviewer reads the diff itself, never the builder's report |
 | Second opinion | Codex gpt-6-astra; big calls add a fresh Claude opus subagent | via ask-advisers |
-| Screenshots, UI checks, prose from supplied material | Codex gpt-6.1-terra | on trial: first 5 runs logged, dropped if 2 need real fixes |
+| Screenshots, UI checks, prose from supplied material | Codex gpt-6.1-terra (trial) | trial: log 5; drop if 2 need fixes |
 | UI building | Claude opus | |
 | Read-only lookups | Claude haiku · Codex gpt-6-luna | haiku prompts under 100K tokens; Codex gpt-6-luna at high, never low |
 | Bulk mechanical edits | Codex gpt-6-luna (or a script it writes, run here) · Claude sonnet | Codex gpt-6-luna at high, never low; only where a script or test checks the result |
@@ -78,11 +92,11 @@ Someone who works in Codex, with ChatGPT Plus and no Claude plan, gets this one:
 <!-- example:start claude_plan=none codex=plus gemini=none jules=false kimi=false glm=false main_agent=codex -->
 | Work | Use | Notes |
 |---|---|---|
-| Plans, architecture, judgment | Codex gpt-6-astra (the main session) | strong models plan, judge and review; they don't write code |
+| Plans, architecture, judgment | Codex gpt-6-astra (the main session) | strong models plan and review, never code |
 | Features, bug fixes, tests | Codex gpt-6.1-sol | |
 | Review | fresh Codex gpt-6-astra session | no other lane to cross-check against |
 | Second opinion | fresh Codex gpt-6-astra session | follow the Advisers rules; no other lane to ask |
-| Screenshots, UI checks, prose from supplied material | Codex gpt-6.1-terra | on trial: first 5 runs logged, dropped if 2 need real fixes |
+| Screenshots, UI checks, prose from supplied material | Codex gpt-6.1-terra (trial) | trial: log 5; drop if 2 need fixes |
 | UI building | Codex gpt-6.1-sol | |
 | Read-only lookups | Codex gpt-6-luna | Codex gpt-6-luna at high, never low |
 | Bulk mechanical edits | Codex gpt-6-luna (or a script it writes, run here) | Codex gpt-6-luna at high, never low; only where a script or test checks the result |
@@ -120,11 +134,14 @@ an administrator PowerShell, then restart).
 | | Claude Code | Codex | Gemini (Antigravity) |
 |---|---|---|---|
 | How it installs | plugin | `git clone` to `~/.config/routing-kit/kit`, then `kit-install-rules --agent codex` | the same, with `--agent gemini` |
-| Rules and routing table at session start | yes, by itself | yes, after you trust the hook once with `/hooks` in Codex | yes (untested end to end) |
+| Rules and routing table at session start | yes, by itself | yes, once `kit-sync all` has trusted the hooks after its selftest (else approve them in `/hooks`) | yes (untested end to end) |
 | Field guide and helper commands | yes | yes | yes |
-| Skills and status line | yes | no | no |
-| Updates | `claude plugin update` | `git pull`, then `kit-install-rules` again | the same |
+| Shared skills | yes | yes | yes |
+| Status line | yes | no | no |
+| Updates | `claude plugin update`, then `kit-sync all` | `git pull`, then `kit-install-rules` and `kit-sync all` | the same |
 | Claude's part | main agent | reviews and lookups only, and only if you have a Claude plan (Claude Code installed and signed in) | the same |
+
+After changing your private rules or plans, run `kit-sync all` again. Edit the private file, never the block between the routing-kit:rules lines.
 
 Setup puts one start-up hook and a short note into the agent's own settings folder: `~/.codex`
 (or the folder `CODEX_HOME` names; the note goes into `AGENTS.override.md` if that file exists and

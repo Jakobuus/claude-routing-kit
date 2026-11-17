@@ -1,0 +1,13 @@
+#!/bin/bash
+# lib/sync/skills — links kit skills and profile skills into the shared agents
+# skills directory, Claude's skills directory, and Antigravity's skills.json.
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+PLUGIN_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
+. "$PLUGIN_ROOT/bin/kit-common"
+kit_require_supported
+kit_require_python3
+
+kit_python3 "$PLUGIN_ROOT/lib/sync_skills.py" "$@"
+exit $?

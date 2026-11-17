@@ -35,6 +35,9 @@
 set -u
 
 BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+if [ "${1:-}" = --hooks ]; then
+  exec python3 "$BIN_DIR/../lib/selftest_hooks.py"
+fi
 . "$BIN_DIR/kit-common"
 kit_require_supported
 # jq is essential here: fail fast (exit 3, install hint) rather than
@@ -143,7 +146,7 @@ fi
 
 # --- routing table (session-start hook) ------------------------------------
 HOOK="$BIN_DIR/../hooks/session-start"
-hook_out=$("$HOOK" 2>/dev/null)
+hook_out=$("$HOOK" </dev/null 2>/dev/null)
 case "$hook_out" in
   *'## Your routing table'*)
     ok "routing table"

@@ -26,7 +26,7 @@ assert_eq 0 "$code" "codex install exits 0"
 assert_contains "$out" "/hooks" "codex install tells the user to trust the hook with /hooks"
 "$KI" --agent codex --home "$h" >/dev/null 2>&1
 assert_eq 0 "$?" "codex second install exits 0"
-cmd="$PLUGIN_ROOT/hooks/session-start"
+cmd="$PLUGIN_ROOT/hooks/session-start codex"
 n=$("$JQ" --arg c "$cmd" '[.hooks.SessionStart[].hooks[] | select(.command == $c)] | length' "$h/hooks.json")
 assert_eq 1 "$n" "codex: exactly one routing-kit hook entry after two installs"
 assert_eq '{"type":"command","command":"'"$cmd"'"}' "$("$JQ" -c --arg c "$cmd" '.hooks.SessionStart[].hooks[] | select(.command == $c)' "$h/hooks.json")" "codex: hook entry shape"
@@ -36,7 +36,7 @@ assert_eq 1 "$(count "$h/AGENTS.md" "$START")" "codex: one start marker"
 assert_eq 1 "$(count "$h/AGENTS.md" "$END")" "codex: one end marker"
 assert_contains "$(cat "$h/AGENTS.md")" "Be kind." "codex: existing AGENTS.md text kept"
 assert_contains "$(cat "$h/AGENTS.md")" "routing-kit is installed and loads its rules at session start. If this session shows no routing-kit rules, run \`$cmd\` and follow its output." "codex: pointer text"
-[ -x "$cmd" ] && pass || fail "codex: hook command is not executable: $cmd"
+[ -x "$PLUGIN_ROOT/hooks/session-start" ] && pass || fail "codex: hook command is not executable: $cmd"
 case "$cmd" in /*) pass;; *) fail "hook command is not absolute";; esac
 cmp -s "$h/hooks.orig" "$h/hooks.json.routing-kit.bak" && pass || fail "codex: hooks.json backup is not the original"
 cmp -s "$h/AGENTS.orig" "$h/AGENTS.md.routing-kit.bak" && pass || fail "codex: AGENTS.md backup is not the original"
@@ -276,14 +276,15 @@ for ag in codex gemini; do
   "$kit/plugins/routing-kit/bin/kit-install-rules" --agent $ag --home "$conf" >/dev/null 2>&1
   assert_eq 0 "$?" "$ag: install from a path with a space"
   if [ "$ag" = codex ]; then
-    c=$("$JQ" -r '.hooks.SessionStart[-1].hooks[0].command' "$conf/hooks.json"); want="'$kit/plugins/routing-kit/hooks/session-start'"
+    c=$("$JQ" -r '.hooks.SessionStart[-1].hooks[0].command' "$conf/hooks.json"); want="'$kit/plugins/routing-kit/hooks/session-start' codex"
   else
     c=$("$JQ" -r '.["routing-kit"].SessionStart[-1].command' "$conf/config/hooks.json"); want="'$kit/plugins/routing-kit/hooks/session-start-agy'"
   fi
   assert_eq "$want" "$c" "$ag: command is single-quoted"
   # the shell can run the stored command
   r=$(env ROUTING_KIT_HOME="$s/none" sh -c "$c" 2>&1); case "$r" in *"not set up"*) pass;; *) fail "$ag: stored command does not run through a shell: $r";; esac
-  assert_contains "$(cat "$conf/AGENTS.md")" "run \`'$kit/plugins/routing-kit/hooks/session-start'\` and follow its output" "$ag: pointer line quotes the path"
+  suffix=""; [ "$ag" != codex ] || suffix=" codex"
+  assert_contains "$(cat "$conf/AGENTS.md")" "run \`'$kit/plugins/routing-kit/hooks/session-start'$suffix\` and follow its output" "$ag: pointer line quotes the path"
   "$kit/plugins/routing-kit/bin/kit-install-rules" --agent $ag --home "$conf" >/dev/null 2>&1
   n=$(grep -c -F -- "$START" "$conf/AGENTS.md"); assert_eq 1 "$n" "$ag: second install with a space path keeps one block"
   if [ "$ag" = codex ]; then assert_eq 1 "$("$JQ" '.hooks.SessionStart | length' "$conf/hooks.json")" "codex: one group with a space path"; fi
@@ -471,7 +472,7 @@ s=$(mktmp); k1=$(mktmp)/one; k2=$(mktmp)/two; mkdir -p "$k1" "$k2"; cp -R "$REPO
 "$k1/plugins/routing-kit/bin/kit-install-rules" --agent codex --home "$s" >/dev/null 2>&1
 "$k2/plugins/routing-kit/bin/kit-install-rules" --agent codex --home "$s" >/dev/null 2>&1
 assert_eq 1 "$("$JQ" '[.hooks.SessionStart[].hooks[]] | length' "$s/hooks.json")" "a moved kit replaces its recorded old command"
-assert_eq "$k2/plugins/routing-kit/hooks/session-start" "$("$JQ" -r '.hooks.SessionStart[0].hooks[0].command' "$s/hooks.json")" "the new location is the one installed"
+assert_eq "$k2/plugins/routing-kit/hooks/session-start codex" "$("$JQ" -r '.hooks.SessionStart[0].hooks[0].command' "$s/hooks.json")" "the new location is the one installed"
 "$k2/plugins/routing-kit/bin/kit-install-rules" --agent codex --home "$s" --uninstall >/dev/null 2>&1
 [ ! -e "$s/hooks.json" ] && pass || fail "uninstall after a move left hooks.json"
 

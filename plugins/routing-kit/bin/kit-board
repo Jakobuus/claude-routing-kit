@@ -1,0 +1,4 @@
+#!/bin/bash
+KIT_BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+. "$KIT_BIN_DIR/kit-common"
+kit_python3 "$KIT_BIN_DIR/../lib/board_cli.py" "$@"

@@ -1,0 +1,23 @@
+{
+  "artifactDirectoryPath": "/HOME/.gemini/antigravity-cli/brain/session-1",
+  "conversationId": "session-1",
+  "cwd": "/REPO",
+  "error": "",
+  "hookEventName": "PostToolUse",
+  "lastUserInput": "Run `ls`. Then create notes.txt containing hello. Then change hello to bye in notes.txt. Then rename notes.txt to notes2.txt. Then stop.",
+  "modelName": "gemini-4-hydrogen-medium",
+  "stepIdx": 2,
+  "toolCall": {
+    "args": {
+      "CommandLine": "ls",
+      "WaitMsBeforeAsync": 5000,
+      "toolSummary": "List directory contents"
+    },
+    "id": "call_1",
+    "name": "run_command"
+  },
+  "transcriptPath": "/HOME/.gemini/antigravity-cli/brain/session-1/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/REPO"
+  ]
+}

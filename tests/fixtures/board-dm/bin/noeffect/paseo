@@ -1,0 +1,9 @@
+#!/bin/bash
+# Stub paseo, "no effect" variant: logs the call, then exits 0 having done nothing
+# and printed nothing. Only a receiver's own `seen` record may count as delivery.
+{
+  echo "--CALL paseo--"
+  for a in "$@"; do printf '%s\n' "$a"; done
+  echo "--END--"
+} >> "${STUB_LOG:?STUB_LOG not set}"
+exit 0

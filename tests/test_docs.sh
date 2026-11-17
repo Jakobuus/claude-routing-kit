@@ -35,6 +35,12 @@ for n in 15 100 300; do
   assert_contains "$(cat "$START")" "kit-profile set jules_daily_limit $n" "START-HERE maps a Jules plan to limit $n"
 done
 
+# START-HERE asks about the two guards and saves them as one setting.
+assert_contains "$(cat "$START")" "Turn on the guard against destructive commands?" "START-HERE asks about the destructive guard"
+assert_contains "$(cat "$START")" "Turn on the guard for owner checkouts?" "START-HERE asks about the owner-checkout guard"
+assert_contains "$(cat "$START")" 'blocks: {"destructive": <true|false>, "owner_checkout": <true|false>}' "START-HERE names the blocks setting"
+assert_contains "$(cat "$START")" 'kit-profile set blocks' "START-HERE saves the blocks setting"
+
 # --- commands named in the docs exist ---------------------------------------
 cmds=$(cat "$README" "$START" \
   | grep -oE '(^|[^-A-Za-z0-9_/.])(kit-[a-z][a-z-]*|locked-build)' \

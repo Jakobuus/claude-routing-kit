@@ -1,0 +1,7 @@
+{
+  "session_id": "session-5",
+  "transcript_path": "/HOME/.codex/sessions/2026/01/01/rollout-2026-01-01T00-00-00-session-5.jsonl",
+  "cwd": "/REPO",
+  "hook_event_name": "SessionEnd",
+  "reason": "other"
+}

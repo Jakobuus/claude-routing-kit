@@ -33,10 +33,12 @@ kit_require_python3
 
 MODELS_FILE="$BIN_DIR/../rules/models.json"
 REPO="" NAME="" BRIEF="" MODEL=""
+PASEO=0
 usage() { kit_die 2 "usage: kit-codex-build --repo DIR --name NAME --brief FILE [--model MODEL]"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --paseo) PASEO=1; shift ;;
     --repo)
       [ $# -ge 2 ] || usage
       REPO=$2; shift 2 ;;
@@ -92,6 +94,9 @@ on_exit() {
       wait "$codex_pid"
     } 2>/dev/null
   fi
+  if [ -n "${paseo_agent:-}" ]; then
+    codex_paseo_cleanup || code=4
+  fi
   ( ledger_append codex "${MODEL:--}" "$NAME" - - "$code" ) \
     || echo "kit-codex-build: warning: could not write a ledger line" >&2
   [ -n "${run_dir:-}" ] && { run_cleanup "$run_dir" || true; }
@@ -102,6 +107,14 @@ trap on_exit EXIT
 if [ -z "$MODEL" ]; then
   MODEL=$(kit_jq -e -r '.codex.build' "$MODELS_FILE" 2>/dev/null) \
     || kit_die 2 "invalid or incomplete models file at $MODELS_FILE"
+fi
+
+if [ "$PASEO" = 1 ]; then
+  . "$BIN_DIR/../lib/codex-paseo.sh"
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  codex_paseo_build
+  exit $?
 fi
 
 command -v codex >/dev/null 2>&1 \
@@ -155,7 +168,7 @@ if command -v caffeinate >/dev/null 2>&1; then
   caffeinate -is -w $$ >/dev/null 2>&1 &
 fi
 set -m
-codex exec -m "$MODEL" --dangerously-bypass-approvals-and-sandbox -C "$wt" < "$brief_snapshot" > "$run_dir/codex-output.txt" 2>&1 &
+KIT_ROLE=worker codex exec -m "$MODEL" --dangerously-bypass-approvals-and-sandbox -C "$wt" < "$brief_snapshot" > "$run_dir/codex-output.txt" 2>&1 &
 codex_pid=$!
 wait "$codex_pid"
 codex_code=$?

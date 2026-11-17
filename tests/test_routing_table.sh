@@ -75,10 +75,13 @@ for plan in pro max5 max20 team api; do
   done
 done
 
-# Model identifiers belong to models.json and tests only (README.md shows a dated example table).
+# Routing model identifiers belong to models.json. The guide and README show
+# examples; doctor cost probes and hook self-tests deliberately name models,
+# and delegation.py has a model-name example in a comment. These are not
+# routing defaults. Keep the audit on routing code rather than every tracked file.
 ids=$(/usr/bin/jq -r '[.claude, .codex, .gemini, .kimi, .glm] | map(del(.base_url, .host)) | .[] | .[] | select(type == "string")' "$(dirname "$RT")/../rules/models.json" | sort -u)
 for id in $ids; do
-  if git -C "$REPO_ROOT" grep -l -F -w -- "$id" -- . ':!tests' ':!plugins/routing-kit/rules/models.json' ':!plugins/routing-kit/guide' ':!README.md' | grep -q .; then
+  if git -C "$REPO_ROOT" grep -l -F -w -- "$id" -- . ':!tests' ':!plugins/routing-kit/rules/models.json' ':!plugins/routing-kit/guide' ':!README.md' ':!plugins/routing-kit/lib/doctor.py' ':!plugins/routing-kit/lib/selftest_hooks.py' ':!plugins/routing-kit/hooks/checks/delegation.py' | grep -q .; then
     fail "model id outside models.json: $id"
   else pass; fi
 done
@@ -119,9 +122,9 @@ assert_contains "$t" "| Hardest builds: long overnight runs, or after a cheaper 
 assert_contains "$t" "Claude sonnet" "full: sonnet"
 assert_contains "$t" "medium or high, never above" "full: sonnet effort text"
 assert_contains "$t" "at high, never low" "full: luna effort text"
-assert_contains "$t" "| Whole-repo reads, 300K+ tokens of context | Gemini gemini-4-argon-high |" "full: whole-repo row"
-assert_contains "$t" "| Very long single outputs | Gemini gemini-4-argon-high |" "full: long outputs row"
-assert_contains "$t" "| Screenshots, UI checks, prose from supplied material | Codex gpt-6.1-terra |" "full: terra row"
+assert_contains "$t" "| Whole-repo reads, 300K+ tokens of context | Gemini gemini-4-argon-high (trial) |" "full: whole-repo row"
+assert_contains "$t" "| Very long single outputs | Gemini gemini-4-argon-high (trial) |" "full: long outputs row"
+assert_contains "$t" "| Screenshots, UI checks, prose from supplied material | Codex gpt-6.1-terra (trial) |" "full: terra row"
 assert_contains "$t" "| Reading untrusted web pages or email while holding tools that can act | Claude opus | never Fable |" "full: untrusted row"
 assert_contains "$t" "Claude haiku · Codex gpt-6-luna · Gemini gemini-4-hydrogen-low" "full: lookups"
 assert_contains "$t" "Gemini gemini-4-hydrogen-high" "full: research hydrogen high"
@@ -340,6 +343,12 @@ case "$t" in
   *) pass ;;
 esac
 assert_contains "$t" "kit-jules-build" "jules row still appears on a faked Linux uname"
+
+assert_contains "$t" "Jules (trial)" "shipped Jules trial is labeled"
+mkf max20 pro pro true false false
+t=$("$RT" --profile "$p/profile.json")
+assert_contains "$t" "gpt-6.1-terra (trial)" "shipped Terra trial is labeled"
+assert_contains "$t" "gemini-4-argon-high (trial)" "shipped Argon trial is labeled"
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

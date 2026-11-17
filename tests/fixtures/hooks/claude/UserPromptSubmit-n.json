@@ -1,0 +1,9 @@
+{
+  "session_id": "session-4",
+  "transcript_path": "/HOME/.claude/projects/-REPO/session-4.jsonl",
+  "cwd": "/REPO",
+  "prompt_id": "prompt-1",
+  "permission_mode": "default",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Run `ls`. Then create notes.txt containing hello. Then change hello to bye in notes.txt. Then rename notes.txt to notes2.txt. Then stop. Also start one subagent (Agent tool, model haiku) that runs `pwd`."
+}

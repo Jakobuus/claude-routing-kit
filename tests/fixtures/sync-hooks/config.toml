@@ -1,0 +1,8 @@
+# Preserve this comment and spacing.
+model = "example"
+
+[hooks.state."foreign:stop:0:0"]
+trusted_hash = "sha256:foreign"
+
+[projects."/foreign"]
+trust_level = "trusted"

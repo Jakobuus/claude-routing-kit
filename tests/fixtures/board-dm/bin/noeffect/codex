@@ -1,0 +1,10 @@
+#!/bin/bash
+# Stub codex, "no effect" variant: logs the call, then exits 0 although the resume
+# failed (codex 0.166 does this). Only a receiver's own `seen` record may count.
+{
+  echo "--CALL codex--"
+  for a in "$@"; do printf '%s\n' "$a"; done
+  echo "--END--"
+} >> "${STUB_LOG:?STUB_LOG not set}"
+echo "codex: resume failed, thread not woken" >&2
+exit 0

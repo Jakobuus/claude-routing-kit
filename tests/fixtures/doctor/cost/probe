@@ -1,0 +1,8 @@
+#!/bin/bash
+echo invoked >> "$DOCTOR_MARKER"
+case "${0##*/}" in
+  claude) [[ "$*" == *"-p"* && "$*" == *"--output-format json"* ]] || exit 2; file=claude.json ;;
+  codex) [[ "$*" == *"exec"* && "$*" == *"--json"* ]] || exit 2; file=codex.jsonl ;;
+  agy) [[ "$*" == *"--output-format json"* ]] || exit 2; file=agy.json ;;
+esac
+cat "$DOCTOR_COST_FIXTURES/$file"

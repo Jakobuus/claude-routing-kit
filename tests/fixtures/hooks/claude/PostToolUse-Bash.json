@@ -1,0 +1,25 @@
+{
+  "session_id": "session-4",
+  "transcript_path": "/HOME/.claude/projects/-REPO/session-4.jsonl",
+  "cwd": "/REPO",
+  "prompt_id": "prompt-1",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "ls",
+    "description": "List files in current directory"
+  },
+  "tool_response": {
+    "stdout": "calc.py\ntest_calc.py",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu-1",
+  "duration_ms": 53
+}

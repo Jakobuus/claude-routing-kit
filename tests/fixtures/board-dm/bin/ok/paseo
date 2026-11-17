@@ -1,0 +1,10 @@
+#!/bin/bash
+# Stub paseo, "ok" variant: logs this call to $STUB_LOG (one block per call, one
+# argument per line, closed by a line holding only "--END--") and reports success.
+{
+  echo "--CALL paseo--"
+  for a in "$@"; do printf '%s\n' "$a"; done
+  echo "--END--"
+} >> "${STUB_LOG:?STUB_LOG not set}"
+echo "paseo: message queued"
+exit 0

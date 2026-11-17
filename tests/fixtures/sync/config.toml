@@ -1,0 +1,108 @@
+# preserve comments
+model = "example"
+
+[projects."/some/path0"]
+trust_level = "trusted"
+
+[projects."/some/path1"]
+trust_level = "trusted"
+
+[projects."/some/path2"]
+trust_level = "trusted"
+
+[projects."/some/path3"]
+trust_level = "trusted"
+
+[projects."/some/path4"]
+trust_level = "trusted"
+
+[projects."/some/path5"]
+trust_level = "trusted"
+
+[projects."/some/path6"]
+trust_level = "trusted"
+
+[projects."/some/path7"]
+trust_level = "trusted"
+
+[projects."/some/path8"]
+trust_level = "trusted"
+
+[projects."/some/path9"]
+trust_level = "trusted"
+
+[projects."/some/path10"]
+trust_level = "trusted"
+
+[projects."/some/path11"]
+trust_level = "trusted"
+
+[projects."/some/path12"]
+trust_level = "trusted"
+
+[projects."/some/path13"]
+trust_level = "trusted"
+
+[projects."/some/path14"]
+trust_level = "trusted"
+
+[projects."/some/path15"]
+trust_level = "trusted"
+
+[projects."/some/path16"]
+trust_level = "trusted"
+
+[projects."/some/path17"]
+trust_level = "trusted"
+
+[projects."/some/path18"]
+trust_level = "trusted"
+
+[projects."/some/path19"]
+trust_level = "trusted"
+
+[projects."/some/path20"]
+trust_level = "trusted"
+
+[projects."/some/path21"]
+trust_level = "trusted"
+
+[projects."/some/path22"]
+trust_level = "trusted"
+
+[projects."/some/path23"]
+trust_level = "trusted"
+
+[projects."/some/path24"]
+trust_level = "trusted"
+
+[projects."/some/path25"]
+trust_level = "trusted"
+
+[projects."/some/path26"]
+trust_level = "trusted"
+
+[projects."/some/path27"]
+trust_level = "trusted"
+
+[projects."/some/path28"]
+trust_level = "trusted"
+
+[projects."/some/path29"]
+trust_level = "trusted"
+
+[projects."/some/path30"]
+trust_level = "trusted"
+
+[projects."/some/path31"]
+trust_level = "trusted"
+
+[projects."/some/path32"]
+trust_level = "trusted"
+
+[projects."/some/path33"]
+trust_level = "trusted"
+
+[projects."/some/path34"]
+trust_level = "trusted"
+

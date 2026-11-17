@@ -1,0 +1,14 @@
+{
+  "artifactDirectoryPath": "/HOME/.gemini/antigravity-cli/brain/session-3",
+  "conversationId": "session-3",
+  "cwd": "/REPO",
+  "hookEventName": "PreInvocation",
+  "initialNumSteps": 1,
+  "invocationNum": 0,
+  "lastUserInput": "Run `echo timeoutprobe`. Then stop.",
+  "modelName": "gemini-4-hydrogen-low",
+  "transcriptPath": "/HOME/.gemini/antigravity-cli/brain/session-3/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/REPO"
+  ]
+}

@@ -24,11 +24,15 @@ cmd_get() {
 valid_value() {
   key="$1"; value="$2"
   case "$key" in
+    owner_name) return 0 ;;
+    kit_rules) case "$value" in append|replace) return 0 ;; *) return 1 ;; esac ;;
     claude_plan) case "$value" in none|pro|max5|max20|team|api) return 0 ;; *) return 1 ;; esac ;;
     main_agent) case "$value" in claude|codex|gemini) return 0 ;; *) return 1 ;; esac ;;
     gemini) case "$value" in none|pro|ultra) return 0 ;; *) return 1 ;; esac ;;
     codex) case "$value" in none|plus|pro|business|api) return 0 ;; *) return 1 ;; esac ;;
     jules|kimi|glm|paseo) case "$value" in true|false) return 0 ;; *) return 1 ;; esac ;;
+    owner_checkouts|protected_paths) printf '%s' "$value" | kit_jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; return $? ;;
+    blocks) printf '%s' "$value" | kit_jq -e 'type == "boolean" or (type == "object" and all(to_entries[]; if .key == "destructive" or .key == "owner_checkout" then (.value | type == "boolean") else true end))' >/dev/null 2>&1; return $? ;;
     version) case "$value" in 1) return 0 ;; *) return 1 ;; esac ;;
     jules_daily_limit) case "$value" in ''|*[!0-9]*|0) return 1 ;; *) return 0 ;; esac ;;
     *) return 1 ;;
@@ -37,7 +41,7 @@ valid_value() {
 
 cmd_set() {
   key="$1"; value="$2"
-  if [ -z "${key:-}" ] || [ -z "${value:-}" ]; then
+  if [ -z "${key:-}" ] || { [ -z "${value:-}" ] && [ "$key" != owner_name ]; }; then
     kit_die 2 "usage: kit-profile set KEY VALUE"
   fi
   if ! valid_value "$key" "$value"; then
@@ -85,7 +89,7 @@ cmd_set() {
   mkdir -p "$KIT_HOME"
   tmp="$KIT_HOME/profile.json.tmp.$$"
   case "$key" in
-    jules|kimi|glm|paseo|version|jules_daily_limit)
+    blocks|owner_checkouts|protected_paths|jules|kimi|glm|paseo|version|jules_daily_limit)
       echo "$base" | kit_jq --arg k "$key" --argjson v "$value" '.[$k] = $v' > "$tmp" || { rm -f "$tmp"; kit_die 2 "could not write profile"; }
       ;;
     *)
@@ -101,6 +105,9 @@ cmd_validate() {
   fi
   kit_jq -e '
     (.version == 1) and
+    ((has("blocks") | not) or (.blocks | type == "boolean" or (type == "object" and all(to_entries[]; if .key == "destructive" or .key == "owner_checkout" then (.value | type == "boolean") else true end)))) and
+    ((has("owner_name") | not) or (.owner_name | type == "string")) and
+    ((has("kit_rules") | not) or (.kit_rules == "append" or .kit_rules == "replace")) and
     ((.main_agent // "claude") as $m | (["claude","codex","gemini"] | index($m) != null)) and
     ((.claude_plan // "") as $c | (.main_agent // "claude") as $m |
       (["pro","max5","max20","team","api"] | index($c) != null) or ($c == "none" and $m != "claude")) and
@@ -116,7 +123,11 @@ cmd_validate() {
     ((.kimi // false) == true or (.kimi // false) == false) and
     ((.glm // false) == true or (.glm // false) == false) and
     ((.paseo // false) == true or (.paseo // false) == false) and
-    ((.jules_daily_limit // 15) as $j | ($j | type) == "number" and ($j == ($j | floor)) and $j > 0)
+    ((.jules_daily_limit // 15) as $j | ($j | type) == "number" and ($j == ($j | floor)) and $j > 0) and
+    ((has("products") | not) or
+      (.products | type == "array" and all(.[]; type == "string"))) and
+    ((if .skills == null then [] else .skills end) as $s |
+      ($s | type) == "array" and ([$s[] | (type == "string")] | all))
   ' "$PROFILE_PATH" >/dev/null 2>&1
   code=$?
   if [ "$code" -ne 0 ]; then

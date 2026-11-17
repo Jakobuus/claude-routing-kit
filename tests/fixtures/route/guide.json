@@ -1,0 +1,192 @@
+{
+  "version": 1,
+  "checked": "2026-11-15",
+  "summary": "Claude leads on judgment. OpenAI leads on cheap volume.",
+  "headline_benches": [
+    "Terminal-Bench 4.0",
+    "GDPval-AA"
+  ],
+  "bottom_line": [
+    {
+      "work": "Plans and judgment calls",
+      "send_to": "Claude Alpha 1",
+      "why": "Top knowledge-work score | and a pipe in the text",
+      "sources": [
+        "https://artificialanalysis.ai/leaderboards/models"
+      ]
+    },
+    {
+      "work": "Bulk edits",
+      "send_to": "GPT Beta 2 at high",
+      "why": "Cheapest per task",
+      "sources": []
+    }
+  ],
+  "comparison_note": "Scores are independent runs unless marked.",
+  "models": [
+    {
+      "id": "claude-alpha-1",
+      "family": "claude",
+      "name": "Claude Alpha 1",
+      "released": "2026-09-22",
+      "price_in": 4,
+      "price_out": 20,
+      "price_note": "list price",
+      "use_for": "Plans, architecture, review",
+      "summary": "The daily driver.",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "65.2%",
+          "run_by": "independent",
+          "source": "https://vals.ai/benchmarks/terminal-bench-4"
+        },
+        {
+          "bench": "GDPval-AA",
+          "value": "1866",
+          "run_by": "independent",
+          "source": null
+        }
+      ],
+      "pros": [
+        {
+          "text": "Best on knowledge work.",
+          "source": "https://artificialanalysis.ai/leaderboards/models"
+        }
+      ],
+      "cons": [
+        {
+          "text": "Slow to first token [see note].",
+          "source": null
+        }
+      ]
+    },
+    {
+      "id": "gpt-6.1-beta",
+      "family": "codex",
+      "name": "GPT Beta 2",
+      "released": "2026-09-29",
+      "price_in": 2,
+      "price_out": null,
+      "use_for": "Cheap volume",
+      "scores": [
+        {
+          "bench": "Terminal-Bench 4.0",
+          "value": "55.1%",
+          "run_by": "vendor",
+          "source": null
+        }
+      ],
+      "pros": [],
+      "cons": [
+        {
+          "text": "Does the minimum.",
+          "source": null
+        }
+      ]
+    }
+  ],
+  "best_at_note": "Confidence is low where only the vendor ran the test.",
+  "best_at": [
+    {
+      "work": "Code review",
+      "best": "GPT Beta 2",
+      "runner_up": "Claude Alpha 1",
+      "evidence": "Bug coverage 61.3%",
+      "confidence": "Low-medium",
+      "sources": [
+        "https://vals.ai/benchmarks/terminal-bench-4"
+      ]
+    }
+  ],
+  "families": [
+    {
+      "id": "claude",
+      "summary": "Strongest for judgment.",
+      "plans_note": "One weekly pool.",
+      "tends_to": "Be thorough",
+      "watch_for": "Long runs",
+      "brief_with": "A budget"
+    },
+    {
+      "id": "codex",
+      "tends_to": "Lead with the answer",
+      "watch_for": "The bare minimum",
+      "brief_with": "A full spec"
+    }
+  ],
+  "reading_notes": [
+    {
+      "text": "Vendor runs are flattering.",
+      "source": null
+    }
+  ],
+  "media": [
+    {
+      "job": "images",
+      "label": "Images",
+      "match": [
+        "image",
+        "images"
+      ],
+      "options": [
+        {
+          "name": "GPT Image",
+          "product": "chatgpt",
+          "how": "Image tool",
+          "rank": 1,
+          "price_month_usd": 20,
+          "who": "agent"
+        },
+        {
+          "name": "Local painter",
+          "product": "local",
+          "how": "Local tool",
+          "rank": 2,
+          "price_month_usd": null,
+          "who": "agent"
+        }
+      ],
+      "best_overall": "GPT Image",
+      "note": "Check image details."
+    },
+    {
+      "job": "slides",
+      "label": "Slides",
+      "match": [
+        "slides"
+      ],
+      "options": [
+        {
+          "name": "Canva",
+          "product": "canva-connector",
+          "how": "Canva",
+          "rank": 1,
+          "price_month_usd": 15,
+          "who": "owner"
+        }
+      ],
+      "best_overall": "Canva",
+      "note": "Review the slides."
+    },
+    {
+      "job": "music",
+      "label": "Music",
+      "match": [
+        "music"
+      ],
+      "options": [
+        {
+          "name": "Music Pro",
+          "product": "subscription:music-pro",
+          "how": "Music app",
+          "rank": 1,
+          "price_month_usd": 12,
+          "who": "agent"
+        }
+      ],
+      "best_overall": "Music Pro",
+      "note": "Check music rights."
+    }
+  ]
+}

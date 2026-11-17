@@ -239,8 +239,15 @@ LIST=""; NOTE=""
 list_reset() { LIST=""; NOTE=""; }
 add_item() { [ -n "$1" ] && LIST="${LIST:+$LIST · }$1"; return 0; }
 add_note() { [ -n "$1" ] && NOTE="${NOTE:+$NOTE; }$1"; return 0; }
+TRIAL_MODELS=$(kit_jq -r '.trials // {} | keys[]' "$MODELS_FILE")
 row() { # work use notes
-  if [ -n "$3" ]; then echo "| $1 | $2 | $3 |"; else echo "| $1 | $2 | |"; fi
+  use_text="$2"
+  for trial_model in $TRIAL_MODELS; do
+    [ "$trial_model" != jules ] || trial_model=Jules
+    use_text=${use_text//"$trial_model"/"$trial_model (trial)"}
+  done
+  use_text=${use_text//" (trial) (the main session)"/" (the main session) (trial)"}
+  if [ -n "$3" ]; then echo "| $1 | $use_text | $3 |"; else echo "| $1 | $use_text | |"; fi
 }
 
 echo "| Work | Use | Notes |"
@@ -250,12 +257,12 @@ if [ "$MAIN" = claude ]; then
 # 1. Plans, architecture, judgment
 list_reset
 use="Claude $c_strong"
-[ -z "$c_top" ] || use="$use (or the Fable/Opus main session)"
+[ -z "$c_top" ] || use="$use (or Fable/Opus main session)"
 add_note "$(eff_checks "$c_strong")"
 if [ -n "$x_strong" ]; then
-  add_note "big plans also get Codex $x_strong advice"
+  add_note "big plans: ask Codex $x_strong"
 else
-  add_note "strong models plan, judge and review; they don't write code"
+  add_note "strong models plan and review, never code"
 fi
 row "Plans, architecture, judgment" "$use" "$NOTE"
 
@@ -324,7 +331,7 @@ fi
 
 # 8. Screenshots, UI checks, prose from supplied material (Codex Terra)
 if [ -n "$x_screens" ]; then
-  row "Screenshots, UI checks, prose from supplied material" "Codex $x_screens" "on trial: first 5 runs logged, dropped if 2 need real fixes"
+  row "Screenshots, UI checks, prose from supplied material" "Codex $x_screens" "trial: log 5; drop if 2 need fixes"
 fi
 
 # 9. UI building
@@ -390,7 +397,7 @@ join_parts() { out=""; for part in "$@"; do [ -n "$part" ] && out="${out:+$out; 
 list_reset
 use="$m_label${m_strong:+ $m_strong} (the main session)"
 add_note "$(eff_checks "$m_strong")"
-add_note "strong models plan, judge and review; they don't write code"
+add_note "strong models plan and review, never code"
 row "Plans, architecture, judgment" "$use" "$NOTE"
 
 # 2. Features, fixes, tests
@@ -455,7 +462,7 @@ fi
 
 # 7. Screenshots, UI checks, prose from supplied material (Codex Terra)
 if [ -n "$x_screens" ]; then
-  row "Screenshots, UI checks, prose from supplied material" "Codex $x_screens" "on trial: first 5 runs logged, dropped if 2 need real fixes"
+  row "Screenshots, UI checks, prose from supplied material" "Codex $x_screens" "trial: log 5; drop if 2 need fixes"
 fi
 
 # 8. UI building
@@ -498,7 +505,7 @@ fi
 
 # 14. Mechanical work with an existing check (Jules)
 if [ "$jules" = "true" ]; then
-  echo "| Mechanical work with an existing check | Jules via kit-jules-build | GitHub repos only; Google shuts Jules down on 31 Dec 2026; move to Gemini |"
+  row "Mechanical work with an existing check" "Jules via kit-jules-build" "GitHub repos only; Google shuts Jules down on 31 Dec 2026; move to Gemini"
 fi
 
 # Cheap extra builds (Kimi/GLM) -- macOS-only (the Seatbelt jail): never

@@ -38,6 +38,10 @@ Remember the answer as **main agent**. Tell them plainly what their choice gets:
 Do not save the answer yet. The kit refuses a main agent whose plan is not saved, so it is saved in
 step 4, after the plan questions.
 
+Ask what models and plans they already have, including free options such as Google AI Pro for
+students. Record the details in step 4. The routing table follows their chosen lead; Claude is
+the default when no lead is chosen.
+
 ## Step 2: Check the machine
 
 1. Find the system. Run `uname -s`:
@@ -166,7 +170,7 @@ One question at a time. Save each answer straight away.
    with it. Which one: Plus, Pro, Business, API, or none?"
    `kit-profile set codex plus` (or `pro`, `business`, `api`, `none`)
 3. **Gemini.** "Do you have Google AI Pro, Google AI Ultra, or neither?"
-   `kit-profile set gemini pro` (or `ultra`, `none`).
+   `kit-profile set gemini pro` (or `ultra`, `none`). Google AI Pro for students counts as Pro: `kit-profile set gemini pro`.
 4. **Jules.** "Do you want to use Jules, Google's coding helper? It only works on code that is on
    GitHub. Which Jules plan: free, Pro or Ultra?"
    If yes: `kit-profile set jules true`, then save the daily limit that matches the plan they named:
@@ -203,6 +207,8 @@ One question at a time. Save each answer straight away.
    Z.ai) are cheap pay-per-use coding models. The kit runs them locked in a sandbox. Do you want
    Kimi?" Before they answer, read them the Kimi and GLM notes from step 6. Then
    `kit-profile set kimi true` or `false`; same for `glm`.
+
+7. **Guards.** Ask two questions. "Turn on the guard against destructive commands?" It stops commands such as deleting a home folder, a force push, or reading folders where passwords and keys live. "Turn on the guard for owner checkouts?" It stops agents from writing in folders the user names as theirs (for example a client folder they edit by hand); if yes, ask which folders. Both are a seatbelt against agent mistakes, not a security boundary, and both are off unless the user says yes. The setting is `blocks: {"destructive": <true|false>, "owner_checkout": <true|false>}`; save the answers with `kit-profile set blocks '{"destructive": <true|false>, "owner_checkout": <true|false>}'` and, if they named folders, `kit-profile set owner_checkouts '["/full/path", ...]'`.
 
 When all answers are in, save the main agent from step 1. The kit checks that its plan is saved,
 so the order matters:
@@ -364,13 +370,26 @@ kit-install-rules --agent gemini
 
 Running it twice is safe.
 
-- **Codex: the person must trust the hook once.** Codex does not run a new hook until they approve
-  it. Tell them: "Start Codex, type `/hooks`, and approve routing-kit." Until they do, no rules
-  load. If Codex asks again after an update, they approve again.
+- **Codex hook trust.** Codex runs a hook only once it is trusted. `kit-sync all` (step 7b) runs the
+  hooks selftest and, only if it passes, marks the kit hooks trusted in `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`). If it
+  prints a trust warning, or Codex still shows the hooks as untrusted (for example after an update before `kit-sync all` ran
+  again), tell them: "Start Codex, type `/hooks`, and approve routing-kit."
 - **Gemini:** say plainly once more that this path has not been tested end to end.
 
 The hook's command is the clone's full path. If they ever move the clone, run
 `kit-install-rules --agent codex` (or `gemini`) again.
+
+## Step 7b: Share rules, skills and hooks (every main agent)
+
+If they have their own CLAUDE.md or AGENTS.md text, move it by hand to `~/.config/routing-kit/private/rules.md` (or `$ROUTING_KIT_HOME/private/rules.md` if they set ROUTING_KIT_HOME), and empty the old file before syncing. There is no automatic adoption. Run `kit-profile set kit_rules replace` only once that file holds their full rules. The kit then keeps only its own board and media section and the routing table.
+
+Run `kit-sync all --dry-run`, name the files it will touch, and ask. If they say yes, run `kit-sync all`. Codex and Antigravity get the blocks, the delegation check and media routing only through this step. `kit-sync hooks` runs `kit-selftest --hooks` and, only if it passes, marks the kit's Codex hooks trusted in `~/.codex/config.toml` (so they also run in scripted `codex exec` runs, with no `/hooks` step). If the selftest fails the trust is removed again and the command exits 1; Codex then skips the kit hooks until it passes.
+
+For each repo they name, first run `kit-sync repo PATH --dry-run` and read the result back. Tell them: it moves the repo's CLAUDE.md text into AGENTS.md, leaves CLAUDE.md as one line that points to it, moves repo skills to `.agents/skills`, and makes one git commit. The repo must have no uncommitted changes. Run it only if they say yes. To take it back, revert that commit (`git revert`); `--undo` does not apply here.
+
+`kit-sync rules|skills|hooks --undo` (or `kit-sync all --undo`) takes out the kit's rules block, skill links and hook entries. It never restores old copies. It removes the Codex trust block it wrote (one block at the end of config.toml between two `# routing-kit hook trust` comment lines; if anything was added after it, nothing is removed and it tells you to remove it by hand) and leaves the `project_doc_max_bytes` line in Codex's config.toml; remove that by hand if wanted. It refuses a rules block edited by hand unless `--force` is added. Shared skills are the kit's own skills plus folders listed under `skills` in the profile. Edit `skills` and `products` by hand in `~/.config/routing-kit/profile.json`; `kit-route` uses `products` to find options for media and document jobs.
+
+`kit-doctor` lists hand edits and missing pieces in what kit-sync wrote, rule files too big for an agent, new hook errors since the last check, and media jobs from the last 7 days with how many got a suggested route (it cannot tell whether the agent followed it). `kit-board` supports post, read, claims and send. `<owner> says (quoted via <from>)` shows the profile's `owner_name` (`kit-profile set owner_name NAME`), or "the owner"; another agent's note is not the owner's approval. `kit-quota --pick "<row name from the routing table>"`, for example `kit-quota --pick "Read-only lookups"`, names the model in that row whose plan has the most room left this week.
 
 ## Step 8: Run the self-test
 
@@ -402,6 +421,7 @@ Show them, briefly:
    - Codex or Gemini: a copy of the kit in `~/.config/routing-kit/kit`, one line in their shell
      settings file (the PATH line, only if they agreed), and the start-up hook plus a short note in the agent's own
      settings folder (step 7);
+   - if they ran `kit-sync all`: a marked rules block in CLAUDE.md and both AGENTS.md files, the kit hooks in Codex and Antigravity hooks files, skill links in `~/.agents/skills` and `~/.claude/skills`, and in `~/.codex/config.toml` one line plus, once the hooks selftest passes, one trust table per kit hook;
    - the superpowers plugin, if they took it;
    - the status line, if they said yes;
    - the Paseo pill, if they said yes;
@@ -421,8 +441,8 @@ Show them, briefly:
    the table carries a note when a model is not offered by their installed Codex or Gemini. Both
    say how to update.
 4. **Start a new session** so the rules and this table load: for Claude Code `/exit`, then `claude`;
-   for Codex or Gemini, start the agent again (Codex users: approve the hook with `/hooks` first,
-   step 7). From then on they load by themselves at the start of every session. Check once: in the
+   for Codex or Gemini, start the agent again (Codex: `kit-sync all` trusts the hooks after its selftest unless it
+   printed a trust warning; see step 7). From then on they load by themselves at the start of every session. Check once: in the
    new session, ask "Which model do you send a read-only lookup to?" The answer should match the
    Read-only lookups row of the table. If it does not, the rules did not load: go back to step 7.
 5. **How to see usage:** `kit-quota`.
@@ -435,14 +455,17 @@ Show them, briefly:
    git -C ~/.config/routing-kit/kit pull
    kit-install-rules --agent codex
    ```
-   (use `--agent gemini` for Gemini; Codex users approve the hook again in `/hooks` if Codex asks).
+   (use `--agent gemini` for Gemini).
+   Then run `kit-sync all` again. Do the same after changing private/rules.md or their plans; edit that file, never the block between the routing-kit:rules lines.
    Then start a new session. The Paseo pill, if they have it, updates on its own:
    ```
    paseo plugin update routing-kit-pill
    ```
 7. **How to remove it**, in this order.
+   Run `kit-sync all --undo` only if they ran kit-sync; it must come first, while the kit and its record in `~/.config/routing-kit` still exist.
    Claude Code:
    ```
+   kit-sync all --undo
    kit-statusline uninstall
    paseo plugin remove routing-kit-pill
    claude plugin uninstall routing-kit@routing-kit
@@ -455,6 +478,7 @@ Show them, briefly:
 
    Codex or Gemini:
    ```
+   kit-sync all --undo
    kit-install-rules --agent codex --uninstall
    paseo plugin remove routing-kit-pill
    rm -r ~/.config/routing-kit

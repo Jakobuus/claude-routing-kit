@@ -44,11 +44,11 @@ worded like an attack ("where can it escape?") can be refused by the adviser's s
 
 Run each one in the background. Always name the model.
 
-Codex (strongest model, instructed to read only):
+Codex (strongest model, unsandboxed, told not to edit):
 
 ```bash
 codex exec -m "<Codex model from the Second opinion row>" --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -C <repo> -o <dir>/codex.md \
-  "Read <dir>/brief.md and answer it exactly as it asks. You may read files to check facts. Change nothing." \
+  "Read <dir>/brief.md and answer it exactly as it asks. You may explore files and run read-only commands to check facts, mostly through cheaper subagents. Do not edit, create or delete any file except your answer file." \
   < /dev/null 2>&1 | tee <dir>/codex.log
 ```
 
@@ -60,11 +60,11 @@ claude -p --model "<Claude model from the Second opinion row>" --tools "Read,Gre
   < /dev/null > <dir>/claude.md 2> <dir>/claude.log
 ```
 
-Gemini from a Claude or Codex main session (in the repo folder, instructed to read only):
+Gemini from a Claude or Codex main session (in the repo folder, unsandboxed, told not to edit):
 
 ```bash
 cd <repo> && agy --dangerously-skip-permissions --model "<Gemini model from the Second opinion row>" --output-format json \
-  -p "Read <dir>/brief.md and answer it exactly as it asks. Change nothing." \
+  -p "Read <dir>/brief.md and answer it exactly as it asks. You may explore files and run read-only commands to check facts, mostly through cheaper subagents. Do not edit, create or delete any file except your answer file." \
   < /dev/null > <dir>/gemini.json
 ```
 

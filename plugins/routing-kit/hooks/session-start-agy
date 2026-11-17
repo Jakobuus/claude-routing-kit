@@ -9,7 +9,7 @@ HOOK_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PY=/usr/bin/python3
 [ -x "$PY" ] || PY="$(command -v python3 2>/dev/null || true)"
 [ -n "$PY" ] || exit 0
-text=$(KIT_MAIN_AGENT=gemini "$HOOK_DIR/session-start" 2>/dev/null) || exit 0
+text=$(KIT_MAIN_AGENT=gemini "$HOOK_DIR/session-start" gemini 2>/dev/null) || exit 0
 printf '%s' "$text" | "$PY" -I -c '
 import json, sys
 text = sys.stdin.read()

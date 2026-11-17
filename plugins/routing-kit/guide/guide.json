@@ -1188,5 +1188,954 @@
       "text": "On cross-family review, the only quantified study is Greptile's (a vendor, older Opus 4.7 vs GPT 5.5 models). Each family's reviewer scored about 2-3 points higher on P0/P1 bugs when reviewing the other family's pull requests. There were no significance tests and only two families. It supports reviewing across families but does not prove it.",
       "source": "https://www.greptile.com/blog/model-inversion"
     }
+  ],
+  "media": [
+    {
+      "job": "images",
+      "label": "Image generation",
+      "match": [
+        "image",
+        "picture",
+        "illustration",
+        "poster",
+        "artwork",
+        "watercolor",
+        "painting",
+        "draw",
+        "paint"
+      ],
+      "options": [
+        {
+          "name": "GPT Image 2.6 Sunburst",
+          "product": "chatgpt",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Codex image tool, or the ChatGPT app",
+          "rank": 1
+        },
+        {
+          "name": "Nano Banana 2.1",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Gemini app or Flow",
+          "rank": 2
+        },
+        {
+          "name": "Canva Craft",
+          "product": "canva-connector",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Canva connector",
+          "rank": 3
+        },
+        {
+          "name": "FLUX 3 Klein",
+          "product": "local",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Local 8 GB GPU (free commercial use under $5M revenue)",
+          "rank": 4
+        },
+        {
+          "name": "Seedream 5.5",
+          "product": "subscription:Seedream",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Seedream API (cheap bulk images)",
+          "rank": 5
+        }
+      ],
+      "best_overall": "GPT Image 2.6 Sunburst",
+      "note": "GPT Image 2.6 Sunburst leads quality benchmarks; Nano Banana 2.1 is cheaper and suits bulk images."
+    },
+    {
+      "job": "image-editing",
+      "label": "Image editing",
+      "match": [
+        "edit image",
+        "edit photo",
+        "edit picture",
+        "retouch",
+        "restyle image",
+        "change photo background",
+        "modify picture"
+      ],
+      "options": [
+        {
+          "name": "GPT Image 2.6 Sunburst",
+          "product": "chatgpt",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Codex image tool, or the ChatGPT app, for consistent multi-turn edits",
+          "rank": 1
+        },
+        {
+          "name": "Nano Banana 2.1",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Gemini app or Flow for fast, cheap edits",
+          "rank": 2
+        },
+        {
+          "name": "Seedream 5.5",
+          "product": "subscription:Seedream",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Seedream API",
+          "rank": 3
+        }
+      ],
+      "best_overall": "GPT Image 2.6 Sunburst",
+      "note": "GPT Image 2.6 Sunburst leads editing benchmarks; Nano Banana 2.1 is faster for quick edits."
+    },
+    {
+      "job": "logo-svg",
+      "label": "Logos and editable SVG",
+      "match": [
+        "logo",
+        "svg logo",
+        "vector logo",
+        "brand mark",
+        "scalable graphic"
+      ],
+      "options": [
+        {
+          "name": "Recraft V4.1",
+          "product": "subscription:Recraft",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Recraft",
+          "rank": 1
+        },
+        {
+          "name": "Claude SVG",
+          "product": "claude",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Claude writes editable SVG code directly",
+          "rank": 2
+        },
+        {
+          "name": "GPT Image 2.6 Sunburst",
+          "product": "chatgpt",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "ChatGPT app with SVG export",
+          "rank": 3
+        }
+      ],
+      "best_overall": "Recraft V4.1",
+      "note": "Recraft V4.1 produces native layered SVGs; Claude can write SVG code directly."
+    },
+    {
+      "job": "layouts",
+      "label": "Marketing layouts",
+      "match": [
+        "marketing layout",
+        "flyer",
+        "brochure",
+        "social post",
+        "banner design",
+        "deck layout",
+        "business card"
+      ],
+      "options": [
+        {
+          "name": "Canva Craft",
+          "product": "canva-connector",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Canva connector",
+          "rank": 1
+        },
+        {
+          "name": "GPT Image 2.6 Sunburst",
+          "product": "chatgpt",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "ChatGPT app",
+          "rank": 2
+        }
+      ],
+      "best_overall": "Canva Craft",
+      "note": "Canva Craft is trained on human-designed templates and works through the Canva connector."
+    },
+    {
+      "job": "text-to-video",
+      "label": "Text-to-video",
+      "match": [
+        "text to video",
+        "video",
+        "clip"
+      ],
+      "options": [
+        {
+          "name": "Gemini Omni Flash 1.2",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Google Flow (1,000 credits a month, about 30 ten-second clips)",
+          "rank": 1
+        },
+        {
+          "name": "Canva video clips",
+          "product": "canva-connector",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Canva app (up to 8 s Veo-based clips with audio)",
+          "rank": 2
+        },
+        {
+          "name": "Wan 3.0",
+          "product": "subscription:Wan",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Wan 3.0 API",
+          "rank": 3
+        },
+        {
+          "name": "MiniMax H3",
+          "product": "subscription:MiniMax",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "MiniMax H3 API (native 2K, dialogue audio; open weights exclude US, EU, UK)",
+          "rank": 4
+        },
+        {
+          "name": "Seedance 2.5",
+          "product": "subscription:Seedance",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Seedance 2.5 (native 4K, 30 s clips)",
+          "rank": 5
+        },
+        {
+          "name": "LTX-2.5",
+          "product": "local",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Local open-weights run up to 4K and 20 s (free under $10M revenue)",
+          "rank": 6
+        }
+      ],
+      "best_overall": null,
+      "note": "Wan 3.0, MiniMax H3 and Seedance 2.5 are near-tied (top eight within about ±13 Elo); Gemini Omni Flash 1.2 is included in Google AI Pro."
+    },
+    {
+      "job": "image-to-video",
+      "label": "Image-to-video",
+      "match": [
+        "image to video",
+        "image into video",
+        "animate image",
+        "animate photo",
+        "picture to video",
+        "picture into video",
+        "still to video",
+        "video from image",
+        "photo into video",
+        "photo to video",
+        "animate picture"
+      ],
+      "options": [
+        {
+          "name": "Seedance 2.5",
+          "product": "subscription:Seedance",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Seedance 2.5 (native 4K, up to 50 references)",
+          "rank": 1
+        },
+        {
+          "name": "Gemini Omni Flash 1.2",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Google Flow (weaker on image-to-video)",
+          "rank": 2
+        }
+      ],
+      "best_overall": "Seedance 2.5",
+      "note": "Seedance 2.5 leads image-to-video benchmarks; Gemini Omni is included in Google AI Pro but scores lower here."
+    },
+    {
+      "job": "video-editing",
+      "label": "Video editing and restyling",
+      "match": [
+        "edit video",
+        "restyle video",
+        "video object swap",
+        "modify video",
+        "video restyling"
+      ],
+      "options": [
+        {
+          "name": "Runway Aleph 2.0",
+          "product": "subscription:Runway",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Runway Gen-4.5 with Aleph 2.0 (edits up to 30 s at 1080p)",
+          "rank": 1
+        },
+        {
+          "name": "Gemini Omni Flash 1.2",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Google Flow multi-turn editing",
+          "rank": 2
+        }
+      ],
+      "best_overall": "Runway Aleph 2.0",
+      "note": "Runway Aleph 2.0 is best for object swaps and restyles up to 30 s; Gemini Omni supports multi-turn edits."
+    },
+    {
+      "job": "avatars",
+      "label": "Talking-head avatars",
+      "match": [
+        "talking head",
+        "avatar video",
+        "presenter video",
+        "spokesperson",
+        "explainer avatar"
+      ],
+      "options": [
+        {
+          "name": "HeyGen",
+          "product": "subscription:HeyGen",
+          "price_month_usd": 29,
+          "who": "owner",
+          "how": "HeyGen web app",
+          "rank": 1
+        },
+        {
+          "name": "Synthesia",
+          "product": "subscription:Synthesia",
+          "price_month_usd": 19,
+          "who": "owner",
+          "how": "Synthesia web app",
+          "rank": 2
+        },
+        {
+          "name": "Gemini Omni Flash 1.2",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Google Flow avatar mode (requires a recording of your own voice and face)",
+          "rank": 3
+        }
+      ],
+      "best_overall": null,
+      "note": "HeyGen and Synthesia lead for explainers; Gemini Omni avatar mode requires recording your own voice and face."
+    },
+    {
+      "job": "3d-code",
+      "label": "Code-built 3D scenes",
+      "match": [
+        "three.js",
+        "3d code",
+        "webgl",
+        "blender python",
+        "3d scene in code"
+      ],
+      "options": [
+        {
+          "name": "Claude Sonnet 5.5",
+          "product": "claude",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Claude writes three.js or 3D scene code",
+          "rank": 1
+        },
+        {
+          "name": "GPT and Codex",
+          "product": "chatgpt",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Codex writes three.js or Blender Python code",
+          "rank": 2
+        },
+        {
+          "name": "Gemini",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Gemini writes three.js or Blender Python code",
+          "rank": 3
+        }
+      ],
+      "best_overall": null,
+      "note": "Claude Sonnet 5.5 leads three.js benchmarks in a tie with other Claude and GPT models; GPT and Gemini suit Blender Python."
+    },
+    {
+      "job": "3d-mesh",
+      "label": "3D models and meshes",
+      "match": [
+        "3d mesh",
+        "3d model",
+        "3d prop",
+        "3d character",
+        "glb model",
+        "fbx model",
+        "rigged 3d"
+      ],
+      "options": [
+        {
+          "name": "Tripo v3.1",
+          "product": "subscription:Tripo",
+          "price_month_usd": 20,
+          "who": "owner",
+          "how": "Tripo web app (Pro plan for commercial use)",
+          "rank": 1
+        },
+        {
+          "name": "Meshy 7.1",
+          "product": "subscription:Meshy",
+          "price_month_usd": 20,
+          "who": "owner",
+          "how": "Meshy web app (Pro plan for auto-rigging and commercial use)",
+          "rank": 2
+        },
+        {
+          "name": "Hunyuan3D 2.1",
+          "product": "local",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Local open weights (free)",
+          "rank": 3
+        }
+      ],
+      "best_overall": null,
+      "note": "No included plan generates 3D meshes; Tripo and Meshy cost $20 a month for commercial use, and every mesh needs a topology check."
+    },
+    {
+      "job": "usdz",
+      "label": "iOS and AR 3D assets (USDZ)",
+      "match": [
+        "usdz",
+        "ios 3d",
+        "ar asset",
+        "arkit",
+        "quick look 3d"
+      ],
+      "options": [
+        {
+          "name": "Meshy",
+          "product": "subscription:Meshy",
+          "price_month_usd": 20,
+          "who": "owner",
+          "how": "Meshy Pro web app with real-world scale USDZ export",
+          "rank": 1
+        }
+      ],
+      "best_overall": "Meshy",
+      "note": "Only Meshy confirms real-world scale USDZ export; no included plan covers 3D mesh generation."
+    },
+    {
+      "job": "voiceover",
+      "label": "Voiceover and speech synthesis",
+      "match": [
+        "voiceover",
+        "text to speech",
+        "tts",
+        "narration",
+        "spoken audio",
+        "read aloud",
+        "aloud",
+        "out loud"
+      ],
+      "options": [
+        {
+          "name": "ElevenLabs Eleven v4",
+          "product": "subscription:ElevenLabs",
+          "price_month_usd": 6,
+          "who": "owner",
+          "how": "ElevenLabs web app or API",
+          "rank": 1
+        },
+        {
+          "name": "Gemini 3.8 Flash TTS",
+          "product": "subscription:Google AI Studio",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Google AI Studio TTS API, billed per use (not part of the Gemini app plan)",
+          "rank": 2
+        }
+      ],
+      "best_overall": "ElevenLabs Eleven v4",
+      "note": "ElevenLabs leads speech quality with Starter at $6 a month; Gemini TTS is available in AI Studio billed separately."
+    },
+    {
+      "job": "voice-cloning",
+      "label": "Voice cloning",
+      "match": [
+        "voice cloning",
+        "clone voice",
+        "my own voice",
+        "custom voice",
+        "voice sample"
+      ],
+      "options": [
+        {
+          "name": "ElevenLabs",
+          "product": "subscription:ElevenLabs",
+          "price_month_usd": 6,
+          "who": "owner",
+          "how": "ElevenLabs web app using a 10 s voice sample",
+          "rank": 1
+        }
+      ],
+      "best_overall": "ElevenLabs",
+      "note": "No included plan covers voice cloning; ElevenLabs Starter includes it for $6 a month."
+    },
+    {
+      "job": "transcription",
+      "label": "Audio transcription",
+      "match": [
+        "transcribe",
+        "transcription",
+        "speech to text",
+        "diarization",
+        "captions",
+        "subtitles"
+      ],
+      "options": [
+        {
+          "name": "ElevenLabs Scribe v3",
+          "product": "subscription:ElevenLabs",
+          "price_month_usd": 6,
+          "who": "owner",
+          "how": "ElevenLabs web app or API",
+          "rank": 1
+        },
+        {
+          "name": "MAI-Transcribe-2",
+          "product": "subscription:MAI-Transcribe-2",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "MAI-Transcribe-2 API ($1.67 per 1,000 minutes)",
+          "rank": 2
+        },
+        {
+          "name": "whisper.cpp",
+          "product": "local",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Local whisper.cpp CLI",
+          "rank": 3
+        },
+        {
+          "name": "pyannote",
+          "product": "local",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Local speaker separation (diarization error about 17–20%)",
+          "rank": 4
+        }
+      ],
+      "best_overall": null,
+      "note": "ElevenLabs Scribe v3 leads English accuracy, MAI-Transcribe-2 leads German and Spanish, and whisper.cpp runs locally."
+    },
+    {
+      "job": "music",
+      "label": "Music and sound effects",
+      "match": [
+        "music",
+        "song",
+        "soundtrack",
+        "background music",
+        "sound effects",
+        "sfx",
+        "jingle",
+        "beat",
+        "sound effect"
+      ],
+      "options": [
+        {
+          "name": "Suno v6",
+          "product": "subscription:Suno",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Suno web app (ongoing Sony and Universal lawsuits)",
+          "rank": 1
+        },
+        {
+          "name": "Lyria 3 Pro",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Gemini app if enabled on the plan",
+          "rank": 2
+        },
+        {
+          "name": "ElevenLabs Music v2",
+          "product": "subscription:ElevenLabs",
+          "price_month_usd": 6,
+          "who": "owner",
+          "how": "ElevenLabs web app (trained on licensed data)",
+          "rank": 3
+        },
+        {
+          "name": "Stable Audio 3",
+          "product": "local",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Local open-weights run (trained on licensed data)",
+          "rank": 4
+        }
+      ],
+      "best_overall": null,
+      "note": "Suno v6 leads vocal songs with ongoing lawsuits; ElevenLabs Music v2 and Stable Audio 3 use licensed training data."
+    },
+    {
+      "job": "ocr",
+      "label": "Document parsing and OCR",
+      "match": [
+        "ocr",
+        "scan text",
+        "extract text from pdf",
+        "parse document",
+        "tables from pdf",
+        "document parsing",
+        "extract text",
+        "scanned"
+      ],
+      "options": [
+        {
+          "name": "Claude",
+          "product": "claude",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Claude reading the document or image directly",
+          "rank": 1
+        },
+        {
+          "name": "Gemini",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Gemini reading the document or image directly",
+          "rank": 2
+        },
+        {
+          "name": "LlamaParse",
+          "product": "subscription:LlamaParse",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "LlamaParse API for complex tables",
+          "rank": 3
+        },
+        {
+          "name": "Mistral OCR 4",
+          "product": "subscription:Mistral",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Mistral OCR 4 API ($4 per 1,000 pages)",
+          "rank": 4
+        }
+      ],
+      "best_overall": null,
+      "note": "Claude and Gemini handle everyday document OCR; LlamaParse and Mistral OCR 4 win at volume or complex tables."
+    },
+    {
+      "job": "translation",
+      "label": "Translation",
+      "match": [
+        "translate",
+        "translation",
+        "localize",
+        "multilingual"
+      ],
+      "options": [
+        {
+          "name": "Gemini",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Gemini via Antigravity or Gemini app",
+          "rank": 1
+        },
+        {
+          "name": "Claude",
+          "product": "claude",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Claude directly",
+          "rank": 2
+        },
+        {
+          "name": "ChatGPT",
+          "product": "chatgpt",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Codex or ChatGPT",
+          "rank": 3
+        }
+      ],
+      "best_overall": null,
+      "note": "Gemini and Claude lead the Alconost translation index ahead of DeepL, though DeepL still wins on glossaries."
+    },
+    {
+      "job": "ui-mockups",
+      "label": "UI and website mockups",
+      "match": [
+        "ui mockup",
+        "wireframe",
+        "page mockup",
+        "website design",
+        "clickable mockup",
+        "screen design"
+      ],
+      "options": [
+        {
+          "name": "Claude Design",
+          "product": "claude",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Claude Design for prototypes, decks, and landing pages",
+          "rank": 1
+        },
+        {
+          "name": "Google Stitch",
+          "product": "subscription:Google Stitch",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Google Stitch (free for everyone) for quick mockups with Figma export",
+          "rank": 2
+        },
+        {
+          "name": "Figma Make",
+          "product": "figma-connector",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Figma Make",
+          "rank": 3
+        },
+        {
+          "name": "v0",
+          "product": "subscription:v0",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "v0 web app for React UI",
+          "rank": 4
+        },
+        {
+          "name": "Lovable",
+          "product": "subscription:Lovable",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Lovable web app for full-stack apps",
+          "rank": 5
+        },
+        {
+          "name": "Canva",
+          "product": "canva-connector",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Canva app",
+          "rank": 6
+        }
+      ],
+      "best_overall": null,
+      "note": "Claude Design suits prototypes and landing pages, Google Stitch is free with Figma export, and v0 targets React."
+    },
+    {
+      "job": "upscaling",
+      "label": "Image upscaling",
+      "match": [
+        "upscale",
+        "upscaling",
+        "enlarge image",
+        "increase resolution",
+        "sharpen photo",
+        "hi res"
+      ],
+      "options": [
+        {
+          "name": "Upscayl",
+          "product": "local",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Upscayl desktop app (free and local)",
+          "rank": 1
+        },
+        {
+          "name": "Topaz Gigapixel",
+          "product": "subscription:Topaz Gigapixel",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Topaz Gigapixel desktop app for photos",
+          "rank": 2
+        },
+        {
+          "name": "Magnific",
+          "product": "subscription:Magnific",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Magnific web app for AI art",
+          "rank": 3
+        }
+      ],
+      "best_overall": null,
+      "note": "Upscayl runs free and locally; Topaz Gigapixel suits photos and Magnific suits AI art."
+    },
+    {
+      "job": "vectorising",
+      "label": "Vectorising images to SVG",
+      "match": [
+        "vectorise",
+        "vectorize",
+        "raster to svg",
+        "png to svg",
+        "trace image",
+        "convert to svg"
+      ],
+      "options": [
+        {
+          "name": "Recraft vectoriser",
+          "product": "subscription:Recraft",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Recraft web app vectoriser",
+          "rank": 1
+        }
+      ],
+      "best_overall": null,
+      "note": "No included plan vectorises raster images; Recraft vectoriser is the listed option, backed by vendor claims only."
+    },
+    {
+      "job": "background-removal",
+      "label": "Background removal",
+      "match": [
+        "remove background",
+        "background removal",
+        "cut out person",
+        "cut out subject",
+        "cut out background",
+        "transparent background",
+        "isolate subject",
+        "cut background"
+      ],
+      "options": [
+        {
+          "name": "Canva",
+          "product": "canva-connector",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Canva app",
+          "rank": 1
+        },
+        {
+          "name": "Figma",
+          "product": "figma-connector",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Figma app",
+          "rank": 2
+        }
+      ],
+      "best_overall": null,
+      "note": "Canva and Figma include built-in background removal; no independent ranking was found."
+    },
+    {
+      "job": "deep-research",
+      "label": "Deep research",
+      "match": [
+        "deep research",
+        "literature review",
+        "web research report",
+        "market research",
+        "source synthesis"
+      ],
+      "options": [
+        {
+          "name": "Claude Research",
+          "product": "claude",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Claude app Research mode",
+          "rank": 1
+        },
+        {
+          "name": "ChatGPT deep research",
+          "product": "chatgpt",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "ChatGPT app deep research or agent mode",
+          "rank": 2
+        },
+        {
+          "name": "Gemini Deep Research",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "owner",
+          "how": "Gemini app Deep Research",
+          "rank": 3
+        }
+      ],
+      "best_overall": null,
+      "note": "All three plans include a deep research mode; no fair head-to-head benchmark was found."
+    },
+    {
+      "job": "video-understanding",
+      "label": "Understanding video content",
+      "match": [
+        "read video",
+        "watch video",
+        "watch this video",
+        "video understanding",
+        "inspect mp4",
+        "what happens in video",
+        "what happens in this video",
+        "summarize video"
+      ],
+      "options": [
+        {
+          "name": "Gemini via Antigravity",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Gemini 4 Argon or Hydrogen reading the video directly with Antigravity's file reading tool",
+          "rank": 1
+        }
+      ],
+      "best_overall": "Gemini via Antigravity",
+      "note": "Gemini reads visual frames accurately through Antigravity file reading, but do not trust its reading of an audio track inside a video."
+    },
+    {
+      "job": "audio-understanding",
+      "label": "Understanding audio and speech",
+      "match": [
+        "read audio",
+        "listen to audio",
+        "audio understanding",
+        "inspect mp3",
+        "inspect wav",
+        "what is said in",
+        "listen to recording"
+      ],
+      "options": [
+        {
+          "name": "Gemini via Antigravity",
+          "product": "google-ai-pro",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Convert to .mp3 or .wav first (ffmpeg -i in.m4a out.mp3, or extract the audio track from video), then have Gemini read the audio",
+          "rank": 1
+        },
+        {
+          "name": "whisper.cpp",
+          "product": "local",
+          "price_month_usd": null,
+          "who": "agent",
+          "how": "Convert to .wav or .mp3 if needed, then run local whisper.cpp",
+          "rank": 2
+        }
+      ],
+      "best_overall": null,
+      "note": "Convert .m4a or video audio to .mp3 or .wav first; never trust Gemini's reading of an audio track inside a video file."
+    }
   ]
 }

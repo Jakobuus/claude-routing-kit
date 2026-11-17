@@ -4,6 +4,23 @@
 # internal error it prints a repair line and exits 0.
 set -u
 
+if [ "${KIT_ROLE:-}" = worker ]; then
+  cat <<'WORKER'
+## You are a worker
+- Stay inside the task in your brief. Don't refactor code you weren't asked to touch.
+- Run the project's tests (or the check named in the brief) before you finish.
+- Don't commit, push, or change git config.
+- End with three short lists: what you did, what you didn't do, what you couldn't check.
+WORKER
+  worker_home="${KIT_HOME:-${ROUTING_KIT_HOME:-$HOME/.config/routing-kit}}"
+  [ ! -f "$worker_home/private/worker.md" ] || cat "$worker_home/private/worker.md"
+  exit 0
+fi
+
+HOOK_INPUT=
+# An agent writes its JSON and closes stdin at once; anything else (a terminal, an open pipe from a
+# script) must never make session start wait, so give up after one second.
+[ -t 0 ] || IFS= read -r -d '' -t 1 HOOK_INPUT || true
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$HOOK_DIR/.." && pwd -P)}"
 
@@ -87,7 +104,15 @@ if [ "$rc" -ne 0 ] || [ -z "$table" ]; then
   fail "invalid profile"
 fi
 
-rules=$(kit_python3 - "$RULES_FILE" "$PROFILE_PATH" "$MAIN_AGENT" <<'PY'
+# Who reads this output: the program that ran the hook. The Claude plugin's
+# hooks.json passes "claude", session-start-agy passes "gemini"; with no
+# argument the reader is the main agent (Codex runs the bare hook).
+case "${1:-}" in
+  claude|codex|gemini) READER="$1" ;;
+  *) READER="$MAIN_AGENT" ;;
+esac
+
+rules=$(kit_python3 - "$RULES_FILE" "$PROFILE_PATH" "$MAIN_AGENT" "$READER" <<'PY'
 import json, re, sys
 with open(sys.argv[1]) as f:
     rules = f.read()
@@ -102,9 +127,70 @@ for agent in ('claude', 'codex', 'gemini'):
     enabled = sys.argv[3] == agent
     pattern = r'<!-- main:' + agent + r' -->\n(.*?)<!-- /main:' + agent + r' -->\n?'
     rules = re.sub(pattern, lambda m: m.group(1) if enabled else '', rules, flags=re.S)
+# Wording that only fits the program reading the rules sits between
+# only:<agents> markers; they follow the reader, not the profile's main agent.
+rules = re.sub(r'<!-- only:([a-z, ]+) -->\n(.*?)<!-- /only -->\n?',
+               lambda m: m.group(2) if sys.argv[4] in [n.strip() for n in m.group(1).split(',')] else '',
+               rules, flags=re.S)
 print(rules.rstrip())
 PY
 ) || fail "could not filter rules"
+
+# Synced instruction files already carry the rules.
+if kit_python3 - "$PLUGIN_ROOT/lib" "$READER" <<'PYCODE'
+import os, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import sync_rules
+agent = sys.argv[2]
+home = Path(os.environ.get('CODEX_HOME') or str(Path.home()/'.codex')) if agent == 'codex' else Path.home()/('.'+agent)
+p = home/('CLAUDE.md' if agent == 'claude' else 'AGENTS.md')
+if agent == 'codex' and (home/'AGENTS.override.md').exists() and (home/'AGENTS.override.md').stat().st_size:
+    p = home/'AGENTS.override.md'
+try:
+    sys.exit(0 if sync_rules.split(p.read_bytes())[1] is not None else 1)
+except (OSError, ValueError):
+    sys.exit(1)
+PYCODE
+then
+  rules=""
+fi
+doctor_line=$("$PLUGIN_ROOT/bin/kit-doctor" --fast 2>/dev/null | head -n 1)
+board_line=$(KIT_SESSION_INPUT="$HOOK_INPUT" kit_python3 - "$PLUGIN_ROOT/lib" "$READER" <<'PYCODE' 2>/dev/null
+import sys
+sys.path.insert(0, sys.argv[1])
+import board, board_claims, os, json
+# The event decides who this is and where: the payload's session id (Claude and Codex: session_id,
+# Antigravity: conversationId) and cwd. The hook's own folder and an inherited KIT_BOARD_NAME or
+# KIT_BOARD_SESSION say nothing about the session.
+try:
+    event = json.loads(os.environ.get('KIT_SESSION_INPUT') or '{}')
+except ValueError:
+    event = {}
+if not isinstance(event, dict):
+    event = {}
+session = event.get('session_id') or event.get('conversationId') or ''
+repo = board.repository_of(event.get('cwd'))
+rows = board.records()
+os.environ.pop('KIT_BOARD_NAME', None)
+os.environ['KIT_BOARD_FAMILY'] = sys.argv[2]
+os.environ['KIT_BOARD_SESSION'] = session if isinstance(session, str) else ''
+session = os.environ['KIT_BOARD_SESSION']
+reader = board.identity()[0] if session else ''
+cursor = board.cursor_get(reader) if session else None
+cursor_id, cursor_time = (cursor.get('id'), cursor.get('time')) if isinstance(cursor, dict) else (cursor, None)
+ids = [r['id'] for r in rows]
+if cursor_id in ids:
+    newer = set(ids[ids.index(cursor_id) + 1:])
+else:
+    when = board.parse_time(cursor_time)
+    newer = {r['id'] for r in rows if when is None or (board.parse_time(r['time']) or when) > when}
+notes = sum(r['kind'] == 'note' and r['id'] in newer for r in board.visible(reader, repo, rows=rows))
+claims = sum(r['repo'] == repo and not board_claims.expired(r, board.now()) for r in board_claims.latest_claims(rows))
+if notes or claims:
+    print(f'Board: {notes} open notes, {claims} claims for this repo.')
+PYCODE
+)
 
 # One line when the routing guide is stale or its date unreadable; nothing
 # otherwise. kit-guide-check always exits 0.
@@ -133,6 +219,9 @@ $table"
 
 $guide_line"
   fi
+  output="$output${doctor_line:+
+$doctor_line}${board_line:+
+$board_line}"
 }
 
 # drop_section HEADING: the rules without the "## HEADING" section.
@@ -144,7 +233,6 @@ drop_section() {
 # dropping whole sections in a fixed order: Costly tools, then Long jobs. The
 # table, its Note lines and the stale-guide line always stay.
 BUDGET=9400
-HARD_CAP=9900
 # Sizes are counted in bytes, the same in every locale (the text has non-ASCII
 # characters, and bash would count characters or bytes depending on LANG).
 out_len() { printf '%s' "$output" | wc -c | tr -d ' '; }
@@ -158,7 +246,7 @@ fi
 # Last resort, after both drops: keep the table, its Note lines, the stale-guide
 # line and the bin line, and say the rules did not fit. Never the bare repair
 # text for a size reason.
-if [ "$(out_len)" -gt "$HARD_CAP" ]; then
+if [ "$(out_len)" -gt "$BUDGET" ]; then
   rules="routing-kit rules are too long to load; reinstall the kit."
   assemble
 fi

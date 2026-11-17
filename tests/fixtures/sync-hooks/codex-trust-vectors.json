@@ -1,0 +1,87 @@
+{
+ "note": "Hashes reported by codex 0.166.0 (app-server hooks/list currentHash) for this hooks file; captured 2026-11-17",
+ "hooks_json": {
+  "hooks": {
+   "SessionStart": [
+    {
+     "hooks": [
+      {
+       "type": "command",
+       "command": "/a b/kit-hook codex SessionStart",
+       "timeout": 7
+      }
+     ]
+    }
+   ],
+   "UserPromptSubmit": [
+    {
+     "matcher": "ignored-here",
+     "hooks": [
+      {
+       "type": "command",
+       "command": "echo \"ünï\" 'q'"
+      }
+     ]
+    }
+   ],
+   "PreToolUse": [
+    {
+     "hooks": [
+      {
+       "type": "command",
+       "command": "first"
+      }
+     ]
+    },
+    {
+     "matcher": "Bash|apply_patch",
+     "hooks": [
+      {
+       "type": "command",
+       "command": "x",
+       "timeout": 0
+      },
+      {
+       "type": "command",
+       "command": "y",
+       "timeout": 11,
+       "async": true,
+       "statusMessage": "checking <it> & co"
+      }
+     ]
+    }
+   ],
+   "PostToolUse": [
+    {
+     "hooks": [
+      {
+       "type": "command",
+       "command": "p",
+       "timeout": 65
+      }
+     ]
+    }
+   ],
+   "Stop": [
+    {
+     "hooks": [
+      {
+       "type": "command",
+       "command": "s",
+       "timeout": 3
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "codex_hashes": {
+  "pre_tool_use:0:0": "sha256:c59f8fa5f9f6fec3c66eeec11277b2e6c6e7d4e60c163b453a283d3148fafa57",
+  "pre_tool_use:1:0": "sha256:4defcc14b259324d28ddf6df8045ffc266727384c214577e3c8aa98ba5b1a6c7",
+  "pre_tool_use:1:1": "sha256:838ecfc9fde17cb54462f43dcfb509d9e4b8037814f5c73ecfe51ec81d8bfabf",
+  "post_tool_use:0:0": "sha256:51cd2bd58b0a318ff3b5d592a42f268978188c2b6829fe831c91477554aad3e2",
+  "session_start:0:0": "sha256:dde2c8307f85d3570f664623eb471e0a3a6b496243f4ca0724c6ea3027c3b768",
+  "user_prompt_submit:0:0": "sha256:5953fa8213d2952a06e8da2a8384c4c1ccd882b74e086c7dc96fdb1f5b816f45",
+  "stop:0:0": "sha256:5e5da534cd9e1bb877f926af5591b1a5e3486bced1781f0bcaacb35b4e01cf1d"
+ }
+}

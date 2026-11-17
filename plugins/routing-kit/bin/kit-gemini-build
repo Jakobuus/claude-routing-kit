@@ -114,7 +114,7 @@ agy_path=$(command -v "$agy_bin")
 if command -v caffeinate >/dev/null 2>&1; then
   caffeinate -is -w $$ >/dev/null 2>&1 &
 fi
-(kit_close_extra_fds; cd "$wt" && exec env -i ${agy_env[@]+"${agy_env[@]}"} "$agy_path" --dangerously-skip-permissions --disable-slash-commands --model "$MODEL" --output-format json --print-timeout "${TIMEOUT}s" -p "$prompt" </dev/null) > "$run_dir/agy.json" 2> "$run_dir/agy.stderr" &
+(kit_close_extra_fds; cd "$wt" && exec env -i KIT_ROLE=worker ${agy_env[@]+"${agy_env[@]}"} "$agy_path" --dangerously-skip-permissions --disable-slash-commands --model "$MODEL" --output-format json --print-timeout "${TIMEOUT}s" -p "$prompt" </dev/null) > "$run_dir/agy.json" 2> "$run_dir/agy.stderr" &
 agy_pid=$!
 "$KIT_PYTHON3_BIN" -I - "$TIMEOUT" "$agy_pid" "$run_dir/watchdog-$NAME" >/dev/null 2>&1 <<'PYWATCH' &
 import os, signal, sys, time

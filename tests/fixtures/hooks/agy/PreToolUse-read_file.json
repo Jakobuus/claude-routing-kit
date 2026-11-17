@@ -1,0 +1,20 @@
+{
+  "artifactDirectoryPath": "/HOME/.gemini/antigravity-cli/brain/session-2",
+  "conversationId": "session-2",
+  "cwd": "/REPO",
+  "hookEventName": "PreToolUse",
+  "lastUserInput": "Read calc.py with the view tool. Then create a new file extra.txt containing the lines one, two, three using your file-writing tool. Then make two separate non-adjacent edits in extra.txt (change one to 1 and three to 3) using a single multi-edit tool call if you have one. Then delete extra.txt. Then stop.",
+  "modelName": "gemini-4-hydrogen-low",
+  "stepIdx": 2,
+  "toolCall": {
+    "args": {
+      "Path": "/REPO/calc.py"
+    },
+    "id": "call_1",
+    "name": "read_file"
+  },
+  "transcriptPath": "/HOME/.gemini/antigravity-cli/brain/session-2/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/REPO"
+  ]
+}

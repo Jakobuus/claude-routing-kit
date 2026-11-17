@@ -23,7 +23,7 @@ LANES = {'claude', 'codex', 'gemini', 'kimi', 'glm'}
 AVAILABLE_LANES = ('claude', 'codex', 'gemini')
 EFFORT = {'low', 'medium', 'high', 'xhigh', 'max'}
 EFFORT_KEYS = {'use', 'min', 'max'}
-TOP_KEYS = LANES | {'version', 'checked', 'pricing', 'pricing_checked', 'fallbacks', 'effort'}
+TOP_KEYS = LANES | {'version', 'checked', 'pricing', 'pricing_checked', 'fallbacks', 'effort', 'trials'}
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 

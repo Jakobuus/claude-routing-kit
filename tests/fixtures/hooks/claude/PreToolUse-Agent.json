@@ -1,0 +1,20 @@
+{
+  "session_id": "session-4",
+  "transcript_path": "/HOME/.claude/projects/-REPO/session-4.jsonl",
+  "cwd": "/REPO",
+  "prompt_id": "prompt-1",
+  "permission_mode": "default",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+    "description": "Run pwd",
+    "prompt": "Run the shell command `pwd` using the Bash tool and reply with only the output path. Do nothing else.",
+    "subagent_type": "general-purpose",
+    "model": "haiku",
+    "effort": "low"
+  },
+  "tool_use_id": "toolu-2"
+}

@@ -1,0 +1,19 @@
+#!/bin/bash
+# A hook never blocks a session because of its own failure: if python3 is
+# missing or the dispatcher dies, log one line and allow (exit 0).
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+. "$ROOT/bin/kit-common"
+# Subshell: kit_python3's `exit 3` (no python3) must end only this subshell.
+out="$( ( kit_python3 "$ROOT/lib/hook_adapt.py" dispatch "$@" ) 2>/dev/null )"
+code=$?
+if [ "$code" -eq 0 ]; then
+  [ -z "$out" ] || printf '%s\n' "$out"
+  exit 0
+fi
+{ mkdir -p "$KIT_HOME" && printf 'kit-hook %s: dispatcher exited %s, allowing\n' "$*" "$code" >> "$KIT_HOME/hook-errors.log"; } 2>/dev/null
+if [ "$1" = "--max-timeout" ]; then
+  echo 5
+elif [ "$1" = "agy" ] && [ "$2" = "PreToolUse" ]; then
+  echo '{"decision":"allow"}'
+fi
+exit 0

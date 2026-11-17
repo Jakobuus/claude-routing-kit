@@ -1,0 +1,3 @@
+#!/bin/bash
+. "$(dirname "$0")/../../bin/kit-common"
+ PYTHONDONTWRITEBYTECODE=1 kit_python3 "$(dirname "$0")/../sync_rules.py" "$@"

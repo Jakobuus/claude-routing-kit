@@ -1,0 +1,8 @@
+#!/bin/bash
+. "$(dirname "$0")/kit-common"
+if [ -z "$KIT_PYTHON3_BIN" ]; then
+  echo 'kit-doctor: python3 is not installed'
+  exit 0
+fi
+kit_python3 "$(dirname "$0")/../lib/doctor.py" "$@"
+exit 0

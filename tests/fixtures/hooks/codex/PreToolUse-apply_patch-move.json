@@ -1,0 +1,14 @@
+{
+  "session_id": "session-6",
+  "turn_id": "turn-2",
+  "transcript_path": "/HOME/.codex/sessions/2026/01/01/rollout-2026-01-01T00-00-00-session-6.jsonl",
+  "cwd": "/REPO",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Update File: notes.txt\n*** Move to: notes2.txt\n@@\n-bye\n+bye\n*** End Patch"
+  },
+  "tool_use_id": "toolu-9"
+}

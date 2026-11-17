@@ -1,0 +1,27 @@
+{
+  "session_id": "session-4",
+  "transcript_path": "/HOME/.claude/projects/-REPO/session-4.jsonl",
+  "cwd": "/REPO",
+  "prompt_id": "prompt-1",
+  "permission_mode": "default",
+  "agent_id": "agent-1",
+  "agent_type": "general-purpose",
+  "effort": {
+    "level": "low"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "pwd",
+    "description": "Print current working directory"
+  },
+  "tool_response": {
+    "stdout": "/REPO",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu-3",
+  "duration_ms": 6
+}

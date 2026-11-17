@@ -1,0 +1,32 @@
+#!/bin/bash
+# kit-sync — writes the kit's rules, skills and repo rule files into each
+# agent's own files (Claude Code, Codex, Antigravity) from one source.
+#
+#   kit-sync rules  [options]   global rules files       (lib/sync/rules)
+#   kit-sync skills [options]   shared skills folder     (lib/sync/skills)
+#   kit-sync repo PATH [opts]   one repo's AGENTS.md     (lib/sync/repo)
+#   kit-sync all [--dry-run|--undo]   rules, skills, then hooks
+#
+# Each subcommand is its own program in lib/sync/; this file only dispatches.
+set -u
+SYNC_DIR="$(cd "$(dirname "$0")/../lib/sync" && pwd -P)"
+USAGE="usage: kit-sync rules|skills|hooks|repo PATH|all [options]"
+sub="${1:-}"
+case "$sub" in
+  rules|skills|hooks|repo)
+    shift
+    [ -x "$SYNC_DIR/$sub" ] || { echo "kit-sync: $sub is not installed ($SYNC_DIR/$sub)" >&2; exit 3; }
+    exec "$SYNC_DIR/$sub" "$@" ;;
+  all)
+    shift
+    for a in "$@"; do
+      case "$a" in --dry-run|--undo) ;; *) echo "kit-sync all takes only --dry-run or --undo" >&2; exit 2 ;; esac
+    done
+    rc=0
+    for s in rules skills hooks; do
+      "$SYNC_DIR/$s" "$@" || rc=$?
+    done
+    exit "$rc" ;;
+  -h|--help) echo "$USAGE"; exit 0 ;;
+  *) echo "$USAGE" >&2; exit 2 ;;
+esac

@@ -178,6 +178,7 @@ env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" KIT_AGY_CASE=env KIT_AGY_MARKER
 code=$?
 exec 9>&-
 assert_eq 0 "$code" "build with a scrubbed environment succeeds ($(head -c 400 "$envmark.out"))"
+assert_contains "$(cat "$envmark")" "KIT_ROLE=worker" "Gemini worker role"
 seen=$(cat "$envmark")
 for var in DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR MY_SERVICE_TOKEN GITHUB_TOKEN GH_HOST GITHUB_ACTOR AWS_ACCESS_KEY_ID AWS_REGION SSH_AUTH_SOCK OPENAI_API_KEY SOME_SECRET ANTIGRAVITY_API_KEY UNRELATED_VAR; do
   case "$seen" in *"$var="*) fail "agy inherited $var" ;; *) pass ;; esac

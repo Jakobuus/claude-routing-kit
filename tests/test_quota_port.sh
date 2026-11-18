@@ -22,11 +22,11 @@ PYREPLY
 reply .2 "$((base+7200))"
 export QUOTA_NOW=$(date +%s)
 bash "$ROOT/plugins/routing-kit/bin/kit-quota" --json >/dev/null
-reply .8 "$((QUOTA_NOW+7320))"
+reply .8 "$((base+7200+120))"   # exactly at the 120 s tolerance, from the same base second (no clock race)
 export QUOTA_NOW=$(date +%s)
 out=$(bash "$ROOT/plugins/routing-kit/bin/kit-quota" --json)
 assert_eq 80 "$(printf '%s' "$out" | jq -r .gemini.five_hour.percent)" 'replica lower reading retained at tolerance boundary'
-reply .8 "$((QUOTA_NOW+7500))"
+reply .8 "$((base+7200+300))"   # well past the tolerance: a new reset
 export QUOTA_NOW=$(date +%s)
 out=$(bash "$ROOT/plugins/routing-kit/bin/kit-quota" --json)
 assert_eq 20 "$(printf '%s' "$out" | jq -r .gemini.five_hour.percent)" 'new reset accepts lower reading'

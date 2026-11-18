@@ -202,5 +202,17 @@ assert_exit 0 "owner name is accepted" -- env ROUTING_KIT_HOME="$d2" "$KP" set o
 printf '{"version":1,"claude_plan":"pro","owner_name":12}\n' > "$d2/profile.json"
 assert_exit 2 "owner name must be a string" -- env ROUTING_KIT_HOME="$d2" "$KP" validate
 
+for key in claude_usage_db claude_resets_file; do
+  assert_exit 0 "$key accepts path" -- env ROUTING_KIT_HOME="$d" "$KP" set "$key" "/tmp/usage data"
+  assert_exit 2 "$key rejects empty" -- env ROUTING_KIT_HOME="$d" "$KP" set "$key" ""
+done
+for value in paseo direct; do
+  assert_exit 0 "transport $value" -- env ROUTING_KIT_HOME="$d" "$KP" set codex_build_transport "$value"
+done
+assert_exit 2 "bad transport" -- env ROUTING_KIT_HOME="$d" "$KP" set codex_build_transport ssh
+assert_exit 0 "positive daily limit" -- env ROUTING_KIT_HOME="$d" "$KP" set jules_daily_limit 12
+for value in 0 -1 1.5 00; do
+  assert_exit 2 "bad daily limit $value" -- env ROUTING_KIT_HOME="$d" "$KP" set jules_daily_limit "$value"
+done
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

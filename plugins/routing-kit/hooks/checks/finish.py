@@ -15,6 +15,22 @@ PATTERN = re.compile(
     r"done for today|all pushed.*(committed|memory)", re.IGNORECASE)
 
 
+def has_prep_skill(event):
+    """The trigger names a "prep-for-exit" skill the kit does not ship: send it only when the agent of this
+    event can load one (its own skill folders: user-level and the project's, as kit-sync shares them)."""
+    home = Path.home()
+    cwd = Path(event.get("cwd") or ".")
+    projects = [cwd] + list(cwd.parents)   # a project skill may sit at the repo root above the cwd
+    agent = event.get("agent")
+    if agent == "claude":
+        dirs = [Path(os.environ.get("CLAUDE_CONFIG_DIR") or str(home / ".claude"))] + [p / ".claude" for p in projects]
+    elif agent == "codex":
+        dirs = [home / ".agents", Path(os.environ.get("CODEX_HOME") or str(home / ".codex"))] + [p / ".agents" for p in projects]
+    else:
+        dirs = [home / ".agents", home / ".gemini"] + [p / ".agents" for p in projects]
+    return any((d / "skills" / "prep-for-exit" / "SKILL.md").is_file() for d in dirs)
+
+
 def main():
     raw = sys.stdin.read()
     event = json.loads(raw)
@@ -30,7 +46,7 @@ def main():
             owner = json.loads((home / "profile.json").read_text()).get("owner_name", "the owner")
         except (OSError, ValueError):
             owner = "the owner"
-        if PATTERN.search(stripped):
+        if PATTERN.search(stripped) and has_prep_skill(event):
             print(json.dumps({"action": "context", "text": PREP_TEXT.format(owner=owner)}))
         return
     if event.get("event") != "Stop" or os.environ.get("DOUBLE_SHOT_LATTE") != "1":

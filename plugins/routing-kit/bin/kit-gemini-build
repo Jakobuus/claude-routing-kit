@@ -1,5 +1,5 @@
 #!/bin/bash
-# kit-gemini-build --repo DIR --name NAME --brief FILE [--model ID] [--timeout SECS]
+# kit-gemini-build --repo DIR --name NAME --brief FILE [--model ID] [--effort E] [--timeout SECS]
 # Runs Antigravity in a disposable copy of HEAD and leaves a reviewable patch.
 set -uo pipefail
 BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
@@ -10,15 +10,15 @@ kit_require_python3
 . "$BIN_DIR/../lib/export.sh"
 . "$BIN_DIR/../lib/ledger.sh"
 . "$BIN_DIR/../lib/secret-scan.sh"
-REPO='' NAME='' BRIEF='' MODEL='' TIMEOUT=1800
-usage() { kit_die 2 'usage: kit-gemini-build --repo DIR --name NAME --brief FILE [--model ID] [--timeout SECS]'; }
+REPO='' NAME='' BRIEF='' MODEL='' EFFORT='' TIMEOUT=1800
+usage() { kit_die 2 'usage: kit-gemini-build --repo DIR --name NAME --brief FILE [--model ID] [--effort E] [--timeout SECS]'; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --repo|--name|--brief|--model|--timeout)
+    --repo|--name|--brief|--model|--effort|--timeout)
       [ $# -ge 2 ] || usage
       case "$1" in
         --repo) REPO=$2;; --name) NAME=$2;; --brief) BRIEF=$2;;
-        --model) MODEL=$2;; --timeout) TIMEOUT=$2;;
+        --model) MODEL=$2;; --effort) EFFORT=$2;; --timeout) TIMEOUT=$2;;
       esac
       shift 2;;
     *) usage;;
@@ -26,8 +26,16 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$REPO" ] && [ -n "$NAME" ] && [ -n "$BRIEF" ] || usage
 [[ $TIMEOUT =~ ^[1-9][0-9]*$ ]] || kit_die 2 '--timeout must be positive seconds'
-case "$NAME$MODEL" in *$'\t'*|*$'\n'*|*$'\r'*) kit_die 2 '--name and --model may not contain control characters';; esac
+case "$NAME$MODEL$EFFORT" in *$'\t'*|*$'\n'*|*$'\r'*) kit_die 2 '--name and --model may not contain control characters';; esac
 [ -f "$BRIEF" ] || kit_die 2 "no such brief file: $BRIEF"
+GRACE=${KIT_AGY_TIMEOUT_GRACE:-60}
+[[ $GRACE =~ ^(0|[1-9][0-9]{0,5})$ ]] || kit_die 2 'KIT_AGY_TIMEOUT_GRACE must be nonnegative seconds'
+IDLE=${KIT_AGY_IDLE_SECS-900}
+[[ $IDLE =~ ^[1-9][0-9]*$ ]] || kit_die 2 'KIT_AGY_IDLE_SECS must be positive decimal seconds'
+DEADLINE=$((TIMEOUT + GRACE))
+agy_elapsed=0
+cleanup='done' cleanup_reason=''
+BASE='' wt='' branch='' reason='' agy_code=null denied=0
 agy_pid='' watchdog='' run_dir='' final_status='failed' started=$(date -u +%FT%TZ)
 on_exit() {
   code=$?
@@ -40,13 +48,37 @@ on_exit() {
   fi
   if [ -n "$watchdog" ]; then kill "$watchdog" 2>/dev/null || true; wait "$watchdog" 2>/dev/null || true; fi
   if [ -n "$run_dir" ]; then
+    if [ "$cleanup" = pending ]; then
+      cleanup=kept
+      cleanup_reason="patch export interrupted"
+    fi
+    patch=""
+    [ ! -f "$run_dir/build.patch" ] || patch="$run_dir/build.patch"
+    if [ "$cleanup" != kept ]; then
+      # Deletes the copy when its work is saved (lib/export.sh); moves it to $KIT_HOME/retained otherwise.
+      # (c): no process may still be in the copy (a child that left agy's group).
+      if [ -d "$run_dir/wt" ] && open_why=$(run_copy_busy "$run_dir"); then :; else open_why=""; fi
+      run_cleanup_own "$run_dir" "kit-gemini-build ended (exit $code)" "$REPO" "$BASE" "$open_why" || true
+      if [ -e "$run_dir/wt" ] && [ ! -s "$run_dir/retained-at" ]; then
+        cleanup=kept
+        cleanup_reason="the copy could not be moved or deleted"
+      fi
+    fi
     ended=$(date -u +%FT%TZ)
     kit_jq -n --arg repo "$REPO" --arg name "$NAME" --arg model "$MODEL" \
       --arg started "$started" --arg ended "$ended" --arg status "$final_status" \
-      --argjson exit "$code" \
-      '{repo:$repo,name:$name,model:$model,started:$started,ended:$ended,status:$status,exit:$exit}' > "$run_dir/manifest.json" || true
+      --arg base "$BASE" --arg worktree "$wt" --arg branch "$branch" --arg effort "$EFFORT" \
+      --arg reason "$reason" --arg patch "$patch" --argjson agy_exit "$agy_code" --argjson denied "$denied" --argjson elapsed "$agy_elapsed" \
+      --arg cleanup "$cleanup" --arg cleanup_reason "$cleanup_reason" --argjson exit "$code" \
+      '{cleanup:$cleanup,cleanup_reason:$cleanup_reason,repo:$repo,name:$name,model:$model,started:$started,ended:$ended,status:$status,exit:$exit,base:$base,worktree:$worktree,branch:$branch,effort:$effort,reason:$reason,agy_elapsed_seconds:$elapsed,agy_exit:$agy_exit,denied_command_count:$denied,patch:$patch}' > "$run_dir/manifest.json" || true
     [ -f "$run_dir/result.md" ] || printf 'Build %s (exit %s).\n' "$final_status" "$code" > "$run_dir/result.md"
-    run_cleanup "$run_dir" || true
+    if [ "$cleanup" = kept ]; then
+      printf '\nCopy kept at %s\nReason: %s\n' "$wt" "$cleanup_reason" >> "$run_dir/result.md"
+      printf 'result=%s copy=%s cleanup=kept\n' "$run_dir/result.md" "$wt"
+    elif [ -s "$run_dir/retained-at" ]; then
+      printf '\nCopy retained at %s\n' "$(cat "$run_dir/retained-at")" >> "$run_dir/result.md"
+    fi
+    [ -z "$patch" ] || printf "result=%s patch=%s kit-gemini-build: build patch: %s\n" "$run_dir/result.md" "$patch" "$patch"
   fi
   ( ledger_append gemini "${MODEL:--}" "$NAME" - - "$code" ) || echo 'kit-gemini-build: warning: could not write ledger' >&2
   exit "$code"
@@ -58,7 +90,7 @@ fi
 agy_bin=${KIT_AGY_BIN:-agy}
 command -v "$agy_bin" >/dev/null 2>&1 || kit_die 3 'no agy on PATH: install Antigravity CLI and log in with agy'
 BASE=$(kit_git -C "$REPO" rev-parse HEAD 2>/dev/null) || kit_die 2 'no HEAD: commit first'
-REPO=$(kit_realpath "$REPO") || kit_die 2 'could not resolve source repo'
+REPO=$(kit_git -C "$REPO" rev-parse --show-toplevel) || kit_die 2 'could not resolve source repo'
 run_dir=$(run_export "$REPO" "$NAME") || exit $?
 if [ "$(kit_git -C "$run_dir/wt" rev-parse HEAD)" != "$BASE" ]; then
   rm -rf "$run_dir"
@@ -81,6 +113,8 @@ if ! secret_scan --credentials-only "$wt" "$run_dir/brief.md" > "$run_dir/secret
   kit_die 5 'secret scan found a possible secret'
 fi
 prompt=$(cat "$run_dir/brief.md")
+# From here on the copy may hold agy's work: it is deleted only when that work is saved (lib/export.sh).
+run_agent_started "$run_dir" || kit_die 4 'could not mark the run as started'
 # agy runs without a sandbox or permission prompts for unattended builds.
 # Job control gives agy and its children their own process group.
 set -m
@@ -114,15 +148,47 @@ agy_path=$(command -v "$agy_bin")
 if command -v caffeinate >/dev/null 2>&1; then
   caffeinate -is -w $$ >/dev/null 2>&1 &
 fi
-(kit_close_extra_fds; cd "$wt" && exec env -i KIT_ROLE=worker ${agy_env[@]+"${agy_env[@]}"} "$agy_path" --dangerously-skip-permissions --disable-slash-commands --model "$MODEL" --output-format json --print-timeout "${TIMEOUT}s" -p "$prompt" </dev/null) > "$run_dir/agy.json" 2> "$run_dir/agy.stderr" &
+effort_args=()
+[ -z "$EFFORT" ] || effort_args=(--effort "$EFFORT")
+agy_start=$SECONDS
+(kit_close_extra_fds; cd "$wt" && exec env -i KIT_ROLE=worker ${agy_env[@]+"${agy_env[@]}"} "$agy_path" --dangerously-skip-permissions --disable-slash-commands --model "$MODEL" ${effort_args[@]+"${effort_args[@]}"} --output-format json --print-timeout "${TIMEOUT}s" -p "$prompt" </dev/null) > "$run_dir/agy.json" 2> "$run_dir/agy.stderr" &
 agy_pid=$!
-"$KIT_PYTHON3_BIN" -I - "$TIMEOUT" "$agy_pid" "$run_dir/watchdog-$NAME" >/dev/null 2>&1 <<'PYWATCH' &
+"$KIT_PYTHON3_BIN" -I - "$DEADLINE" "$agy_pid" "$run_dir/watchdog-fired" "$IDLE" "$wt" "$run_dir/agy.json" "$run_dir/agy.stderr" >/dev/null 2>&1 <<'PYWATCH' &
 import os, signal, sys, time
-time.sleep(int(sys.argv[1]))
+deadline, idle = int(sys.argv[1]), int(sys.argv[4])
 pid = int(sys.argv[2])
+def snapshot():
+    paths = list(sys.argv[6:])
+    for root, dirs, files in os.walk(sys.argv[5], followlinks=False):
+        dirs[:] = [d for d in dirs if d != '.git']
+        paths.extend(os.path.join(root, f) for f in files)
+    result = []
+    for path in paths:
+        try:
+            st = os.lstat(path)
+            result.append((path, st.st_mtime_ns, st.st_size))
+        except OSError:
+            pass
+    return sorted(result)
+start = last = time.monotonic()
+previous = snapshot()
+while True:
+    time.sleep(min(1, idle))
+    current = snapshot()
+    now = time.monotonic()
+    if current != previous:
+        last, previous = now, current
+    cause = 'timeout' if now - start >= deadline else 'idle' if now - last >= idle else ''
+    if cause:
+        break
 try:
     os.killpg(pid, signal.SIGTERM)
 except ProcessLookupError:
+    sys.exit(0)
+try:
+    with open(sys.argv[3], "w") as note:
+        note.write(cause)
+except OSError:
     pass
 time.sleep(0.3)
 try:
@@ -133,6 +199,7 @@ PYWATCH
 watchdog=$!
 wait "$agy_pid"
 agy_code=$?
+agy_elapsed=$((SECONDS - agy_start))
 kill "$watchdog" 2>/dev/null || true
 wait "$watchdog" 2>/dev/null || true
 watchdog=''
@@ -141,22 +208,123 @@ sleep 0.3
 kill -KILL -"$agy_pid" 2>/dev/null || true
 agy_pid=''
 set +m
+# Decode a JSON stream without reading model-named transcript paths.
+"$KIT_PYTHON3_BIN" -I - "$run_dir" "$agy_code" <<'PYANSWER'
+import json, pathlib, re, sys
+root = pathlib.Path(sys.argv[1])
+raw = (root / 'agy.json').read_text(errors='replace')
+decoder = json.JSONDecoder()
+objects, pos = [], 0
+invalid = False
+try:
+    while pos < len(raw):
+        if raw[pos].isspace():
+            pos += 1
+            continue
+        value, pos = decoder.raw_decode(raw, pos)
+        if isinstance(value, dict): objects.append(value)
+except ValueError:
+    invalid = True
+answers = []
+count = 0
+for obj in objects:
+    for key in ('response', 'message', 'final_message', 'result'):
+        value = obj.get(key)
+        if value is not None:
+            if isinstance(value, str): answers.append(value)
+            break
+    actions = obj.get('denied_actions', [])
+    count += len(actions) if isinstance(actions, (list, dict, str)) else 0
+if not count:
+    pattern = re.compile(r'auto-denied|denied[ -]command|command\s+denied|permission\s+denied', re.I)
+    count = sum(bool(pattern.search(line)) for text in ((root / 'agy.stderr').read_text(errors='replace'), raw if not objects else '') for line in text.splitlines())
+(root / 'denied-count').write_text(str(count))
+answer = answers[-1] if answers else ''
+state = 'ok' if answer.strip() else 'empty answer'
+if invalid or not objects:
+    state = 'invalid output'
+elif objects[-1].get('status', 'SUCCESS') != 'SUCCESS':
+    state = 'status ' + str(objects[-1]['status'])
+if int(sys.argv[2]) != 0:
+    state = 'agy failed (exit ' + sys.argv[2] + ')'
+(root / 'result.md').write_text(answer if answer.strip() else state + '\n')
+(root / 'answer-state').write_text(state)
+PYANSWER
+if [ -f "$run_dir/watchdog-fired" ]; then
+  reason=$(cat "$run_dir/watchdog-fired")
+  if [ "$reason" = idle ]; then
+    printf '\nstopped after %s s without activity.\n' "$IDLE" >> "$run_dir/result.md"
+  else
+  printf '\nTimeout: agy exceeded %s seconds plus %s seconds grace.\n' "$TIMEOUT" "$GRACE" >> "$run_dir/result.md"
+  fi
+fi
+if [ "$agy_elapsed" -gt "$TIMEOUT" ] && [ "$reason" != timeout ]; then
+  printf '\nNote: agy took %ss, past --timeout %s (inside the grace).\n' "$agy_elapsed" "$TIMEOUT" >> "$run_dir/result.md"
+fi
+denied=$(cat "$run_dir/denied-count")
+[ "$denied" -eq 0 ] || echo 'kit-gemini-build: WARNING: agy denied actions; steps may be unverified.' >&2
+# keep_branch: when there is a verified patch (build_patch has just made and checked it), keep the build
+# as branch kit-gemini/<run dir name> in the source repo: one commit on BASE holding BASE plus
+# build.patch. The commit is made in a throwaway clone and only fetched into the repo, so the working
+# tree, the index and the checked-out branch are never touched. An existing branch is never moved:
+# the same content is reused, other content gets the next free -N name. Sets branch (empty if none).
+keep_branch() {
+  local verify stem tree commit have n=1 name
+  branch=''
+  [ -s "$run_dir/build.patch" ] || return 0
+  stem="kit-gemini/$(basename "$run_dir")"
+  kit_git -C "$REPO" check-ref-format "refs/heads/$stem" || return 1
+  verify=$(mktemp -d "$KIT_HOME/verify-XXXXXX") || return 1
+  if kit_git clone --no-local --no-checkout --quiet "$REPO" "$verify" \
+    && kit_git -C "$verify" read-tree "$BASE" \
+    && kit_git -C "$verify" apply --cached "$run_dir/build.patch" \
+    && tree=$(kit_git -C "$verify" write-tree) \
+    && commit=$(kit_git -C "$verify" -c user.name=kit-gemini-build -c user.email=kit-gemini-build@localhost \
+      commit-tree "$tree" -p "$BASE" -m "kit-gemini-build: build result of $(basename "$run_dir")") \
+    && kit_git -C "$verify" update-ref refs/heads/kit-build-result "$commit"; then
+    name=$stem
+    while have=$(kit_git -C "$REPO" rev-parse -q --verify "refs/heads/$name^{tree}" 2>/dev/null); do
+      if [ "$have" = "$tree" ]; then branch=$name; rm -rf "$verify"; return 0; fi
+      n=$((n + 1))
+      [ "$n" -le 99 ] || { rm -rf "$verify"; return 1; }
+      name="$stem-$n"
+    done
+    if kit_git -C "$REPO" -c gc.auto=0 -c maintenance.auto=false fetch --quiet --no-tags --no-write-fetch-head \
+      "$verify" "refs/heads/kit-build-result:refs/heads/$name" 2>/dev/null; then
+      branch=$name
+    fi
+  fi
+  rm -rf "$verify"
+  [ -n "$branch" ]
+}
+build_patch() {
+  cleanup=pending
+  if run_build_patch_fresh "$wt" "$REPO" "$BASE" 2> "$run_dir/staging.stderr"; then
+    cleanup=done
+    keep_branch || echo 'kit-gemini-build: warning: could not keep the build as a branch; build.patch is complete' >&2
+    return 0
+  fi
+  cleanup=kept
+  cleanup_reason="refusing to stage the build: $(cat "$run_dir/staging.stderr")"
+  cat "$run_dir/staging.stderr" >&2
+  return 4
+}
 if [ "$agy_code" -ne 0 ]; then
-  run_build_patch_fresh "$wt" "$REPO" "$BASE" 2>/dev/null || rm -f "$run_dir/build.patch"
+  [ -n "$reason" ] || reason=$(cat "$run_dir/answer-state")
+  build_patch 2>/dev/null || rm -f "$run_dir/build.patch"
   if grep -Eiq 'not logged in|please log in|authentication required|unauthorized' "$run_dir/agy.stderr" "$run_dir/agy.json"; then
     kit_die 3 "agy is not logged in; run agy; see $run_dir/agy.stderr"
   fi
   kit_die 4 "agy failed or timed out; see $run_dir/agy.stderr and $run_dir/agy.json"
 fi
-if ! kit_jq -e '.status == "SUCCESS" and (.response | type == "string")' "$run_dir/agy.json" >/dev/null 2>&1; then
-  kit_die 4 "agy returned an invalid or unsuccessful result; see $run_dir/agy.json"
+if [ "$(cat "$run_dir/answer-state")" != ok ]; then
+  reason=$(cat "$run_dir/answer-state")
+  build_patch 2>/dev/null || rm -f "$run_dir/build.patch"
+  kit_die 4 "$reason; see $run_dir/result.md"
 fi
-kit_jq -r '.response' "$run_dir/agy.json" > "$run_dir/result.md"
-if kit_jq -e '(.denied_actions // []) | length > 0' "$run_dir/agy.json" >/dev/null; then
-  echo 'kit-gemini-build: WARNING: agy denied actions; steps may be unverified. Inspect agy.json and rerun checks yourself.' >&2
-fi
-run_build_patch_fresh "$wt" "$REPO" "$BASE" || exit 4
+build_patch || exit 4
 final_status='success'
 cat "$run_dir/build.patch"
 echo "kit-gemini-build: run dir: $run_dir"
 echo "kit-gemini-build: build patch: $run_dir/build.patch"
+[ -z "$branch" ] || echo "kit-gemini-build: branch: $branch (kept in $REPO)"

@@ -67,7 +67,7 @@ with a rule here, theirs wins: follow it and mention the clash once.
   Same for `codex exec`. `kit-codex-build` takes `--model` only.
 <!-- /lane:codex -->
 <!-- lane:gemini -->
-  Same for `agy -p`. `kit-gemini-build` takes `--model` only.
+  Same for `agy -p`. `kit-gemini-build` takes `--model` (and `--effort`).
 <!-- /lane:gemini -->
 <!-- only:claude -->
   Likewise every subagent gets `model` and `effort`.

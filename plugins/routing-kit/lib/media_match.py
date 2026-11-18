@@ -1,6 +1,7 @@
 """Shared media loading and matching. Recall first: the injected line is conditional ("if this asks
 is a media job … (not code)"), so a false match costs one ignorable sentence, while a
 missed media request means the routing is not followed. Only explicit code signals stop a match."""
+from datetime import datetime, timezone
 import json
 import re
 from pathlib import Path
@@ -155,7 +156,7 @@ def private_jobs(home):
     try:
         home.mkdir(parents=True, exist_ok=True)
         with (home / "hook-errors.log").open("a", encoding="utf-8") as stream:
-            stream.write("media: ignoring private/media.json: %s\n" % problem)
+            stream.write(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ ") + "media: ignoring private/media.json: %s\n" % problem)
     except OSError:
         pass
     return []

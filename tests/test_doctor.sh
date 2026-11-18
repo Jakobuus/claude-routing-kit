@@ -167,5 +167,15 @@ for _ in range(3):
     assert result.returncode==0 and result.stdout==b'', result
 assert statistics.median(times)<.200, times
 PY
+clean
+for target in "$claude_home/settings.json" "$CODEX_HOME/hooks.json" "$gemini_home/config/hooks.json"; do
+  mkdir -p "$(dirname "$target")"
+  printf '%s' '{"hooks":{"PreToolUse":[{"hooks":[{"command":"/kit/hooks/kit-hook","timeout":11}]}]}}' > "$target"
+done
+out=$(run)
+assert_contains "$out" "run kit-sync hooks" "stale hook timeout has fix"
+assert_eq 3 "$(printf '%s\n' "$out" | /usr/bin/grep -c 'hook timeout too low')" "all three homes checked"
+out=$(run --fast)
+assert_eq "" "$out" "fast skips timeout checks"
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

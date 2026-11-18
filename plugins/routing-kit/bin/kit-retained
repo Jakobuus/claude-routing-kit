@@ -1,0 +1,52 @@
+#!/bin/bash
+# kit-retained list
+# kit-retained prune --older-than DAYS
+#
+# Build copies an agent worked in are never deleted by the kit itself. When a
+# run ends (or an old run is swept), its copy is moved to
+# $KIT_HOME/retained/<run name>, with a small <run name>.why file next to it
+# (when, from where, why). This command is the only thing that deletes them.
+#
+#   list                      one line per retained copy: age in days, size,
+#                             name, reason; then a total.
+#   prune --older-than DAYS   delete the copies retained more than DAYS days
+#                             ago. DAYS is required: a whole number of 1 or
+#                             more, read as decimal (08 is 8); there is no
+#                             default. A copy whose age is unknown (no .why
+#                             note, or one without a plain retained_at time
+#                             that is not in the future) is never pruned.
+#
+# Only real folders directly in $KIT_HOME/retained are ever touched. The work
+# is done through an open handle on that folder, under a lock: a copy is first
+# moved into a private folder there, checked to be the one whose age was read,
+# and only then deleted. Links are never followed (lib/retained.py).
+# Exit: 0 done, 2 bad usage, 4 a copy could not be deleted.
+set -uo pipefail
+
+BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+. "$BIN_DIR/kit-common"
+
+usage() { kit_die 2 "usage: kit-retained list | kit-retained prune --older-than DAYS"; }
+
+kit_require_python3
+LIB="$BIN_DIR/../lib/retained.py"
+
+cmd="${1:-}"
+[ $# -ge 1 ] || usage
+shift
+case "$cmd" in
+  list)
+    [ $# -eq 0 ] || usage
+    kit_python3 "$LIB" list "$KIT_HOME"
+    ;;
+  prune)
+    [ $# -eq 2 ] && [ "$1" = --older-than ] || usage
+    # Digits only, at most six: never handed to shell arithmetic, where 010 would be eight.
+    case "$2" in ''|*[!0-9]*|???????*) usage ;; esac
+    kit_python3 "$LIB" prune "$KIT_HOME" "$2"
+    code=$?
+    [ "$code" -ne 2 ] || usage
+    exit "$code"
+    ;;
+  *) usage ;;
+esac

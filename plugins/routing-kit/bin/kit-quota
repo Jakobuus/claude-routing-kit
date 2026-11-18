@@ -8,7 +8,7 @@
 #   Codex    the newest ~/.codex/sessions/**/*.jsonl line that carries
 #            rate_limits (ported window-picking logic from codex-usage).
 #   Jules    `jules remote list --session` (ported table-parsing logic
-#            from jules-usage; daily limit from profile or environment override; defaults to 15).
+#            from jules-usage; daily limit from profile or environment override; defaults to 100).
 #   Kimi/GLM the token and cost sums of $KIT_HOME/ledger.tsv's locked-build
 #            rows since the 1st of the month.
 #
@@ -45,7 +45,7 @@ case "${1:-}" in
   *) kit_die 2 "usage: kit-quota [--json]" ;;
 esac
 
-NOW=$(date +%s)
+NOW=${QUOTA_NOW:-$(date +%s)}
 CODEX_SESSIONS="${CODEX_HOME:-$HOME/.codex}/sessions"
 JULES_CONCURRENT_LIMIT=${KIT_JULES_CONCURRENT_LIMIT:-15}
 JULES_SEEN_FILE="$KIT_HOME/jules-seen.tsv"
@@ -60,7 +60,7 @@ prof_glm='false'
 prof_jules_daily_limit=''
 prof_claude_plan=''
 if [ -f "$PROFILE_PATH" ]; then
-  row=$(kit_jq -r '[(.codex // "none"), (.gemini // "none"), (.jules // false), (.kimi // false), (.glm // false), (.jules_daily_limit // 15)] | @tsv' \
+  row=$(kit_jq -r '[(.codex // "none"), (.gemini // "none"), (.jules // false), (.kimi // false), (.glm // false), (.jules_daily_limit // 100)] | @tsv' \
     "$PROFILE_PATH" 2>/dev/null)
   if [ -n "$row" ]; then
     IFS=$'\t' read -r prof_codex prof_gemini prof_jules prof_kimi prof_glm prof_jules_daily_limit <<< "$row"
@@ -71,14 +71,14 @@ fi
 # The env var always wins (documented override for tests and for a friend
 # who wants to try a number without touching the profile); otherwise use
 # the profile's jules_daily_limit (kit-profile validates it's a positive
-# integer, but fall back to 15 defensively if it somehow isn't); default 15
-# (free-plan Jules) when neither is set.
+# integer, but fall back to 100 defensively if it somehow isn't); default 100
+# (Jules Pro; free-plan users set 15) when neither is set.
 if [ -n "${KIT_JULES_DAILY_LIMIT:-}" ]; then
   JULES_DAILY_LIMIT="$KIT_JULES_DAILY_LIMIT"
 elif [[ "$prof_jules_daily_limit" =~ ^[1-9][0-9]*$ ]]; then
   JULES_DAILY_LIMIT="$prof_jules_daily_limit"
 else
-  JULES_DAILY_LIMIT=15
+  JULES_DAILY_LIMIT=100
 fi
 
 # ---- bucket PERCENT RESET WINDOW STALE_OK -- sets BTEXT/BJSON --------
@@ -89,11 +89,11 @@ bucket() {
   local percent="$1" reset="$2" window="$3"
   local pace='null' flag='' elapsed raw_percent
   BTEXT='–'
-  BJSON='{"percent":null,"resets_epoch":null,"pace":null}'
+  BJSON='{"percent":null,"resets_epoch":null,"pace":null,"stale":false}'
   [[ $percent =~ ^[0-9]+([.][0-9]+)?$ && $reset =~ ^[0-9]+$ ]] || return
   if (( reset <= NOW )); then
     BTEXT='0% (reset)'
-    BJSON=$(printf '{"percent":0,"resets_epoch":%s,"pace":null}' "$reset")
+    BJSON=$(printf '{"percent":0,"resets_epoch":%s,"pace":null,"stale":false}' "$reset")
     return
   fi
   raw_percent=$percent
@@ -107,49 +107,80 @@ bucket() {
   else
     BTEXT="${percent}% (pace –)"
   fi
-  BJSON=$(printf '{"percent":%s,"resets_epoch":%s,"pace":%s}' "$percent" "$reset" "$pace")
+  BJSON=$(printf '{"percent":%s,"resets_epoch":%s,"pace":%s,"stale":false}' "$percent" "$reset" "$pace")
 }
 
-# ---- Claude: $KIT_HOME/claude-limits.json ----------------------------
-claude_text='Claude 5h – · wk –'
-claude_json='{"five_hour":{"percent":null,"resets_epoch":null,"pace":null},"week":{"percent":null,"resets_epoch":null,"pace":null},"stale":false}'
-LIMITS_PATH="$KIT_HOME/claude-limits.json"
-if [ -f "$LIMITS_PATH" ]; then
-  row=$(kit_jq -r '
-    [ (.five_hour.used_percentage // ""),
-      (.five_hour.resets_at // ""),
-      (.seven_day.used_percentage // ""),
-      (.seven_day.resets_at // ""),
-      (.sampled // "") ] | @tsv
-  ' "$LIMITS_PATH" 2>/dev/null)
-  if [ -n "$row" ]; then
-    c5_pct=$(printf '%s\n' "$row" | cut -f1)
-    c5_reset=$(printf '%s\n' "$row" | cut -f2)
-    cwk_pct=$(printf '%s\n' "$row" | cut -f3)
-    cwk_reset=$(printf '%s\n' "$row" | cut -f4)
-    c_sampled=$(printf '%s\n' "$row" | cut -f5)
-    bucket "$c5_pct" "$c5_reset" 18000
-    c5_text=$BTEXT c5_json=$BJSON
-    bucket "$cwk_pct" "$cwk_reset" 604800
-    cwk_text=$BTEXT cwk_json=$BJSON
-
-    stale='false'
-    age_suffix=''
-    if [[ $c_sampled =~ ^[0-9]+$ ]]; then
-      age=$((NOW - c_sampled))
-      if (( age > 21600 )); then
-        stale='true'
-        age_suffix=" ($((age / 3600)) h old)"
-      fi
-    fi
-    claude_text="Claude 5h ${c5_text} · wk ${cwk_text}${age_suffix}"
-    claude_json=$(printf '{"five_hour":%s,"week":%s,"stale":%s}' "$c5_json" "$cwk_json" "$stale")
+# ---- Claude: merge optional database samples with statusline samples ----
+claude_rows=$(kit_python3 - "$KIT_HOME/claude-limits.json" "${QUOTA_CLAUDE_DB:-$(kit_jq -r '.claude_usage_db // ""' "$PROFILE_PATH" 2>/dev/null)}" <<'PYCLAUDE'
+import json, sqlite3, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+rows = []
+for key in ('five_hour', 'seven_day', 'weekly_fable'):
+    value = data.get(key) or {}
+    if not isinstance(value, dict): value = {}
+    rows.append((value.get('used_percentage'), value.get('resets_at'), data.get('sampled')))
+try:
+    from pathlib import Path
+    db = sqlite3.connect(Path(sys.argv[2]).expanduser().resolve().as_uri() + '?mode=ro', uri=True, timeout=0.5)
+    for i, name in enumerate(('session', 'weekly_all', 'weekly_scoped:Fable')):
+        row = db.execute('SELECT percent, resets_epoch, sampled_epoch FROM limit_samples WHERE bucket_id=? ORDER BY sampled_epoch DESC, rowid DESC LIMIT 1', (name,)).fetchone()
+        if row and (rows[i][0] is None or rows[i][2] is None or row[2] > rows[i][2]):
+            rows[i] = row
+    db.close()
+except Exception:
+    pass
+for row in rows:
+    print(' '.join('-' if x is None else str(x) for x in row))
+PYCLAUDE
+)
+ctexts=() cjsons=() stale=false
+[[ ${QUOTA_STALE_SECS:-} =~ ^[0-9]+$ ]] && STALE=$QUOTA_STALE_SECS || STALE=1800
+idx=0
+while read -r pct reset sampled; do
+  window=604800; [ "$idx" -eq 0 ] && window=18000
+  bucket "$pct" "$reset" "$window"
+  bs=false
+  if [[ $sampled =~ ^[0-9]+$ && $reset =~ ^[0-9]+$ ]] && (( reset > NOW && NOW - sampled > $STALE )); then
+    bs=true; [ "$idx" -lt 2 ] && stale=true; BTEXT="$BTEXT (stale)"
   fi
-fi
+  BJSON=$(printf '%s' "$BJSON" | kit_jq -c --argjson stale "$bs" '. + {stale:$stale}')
+  ctexts+=("$BTEXT"); cjsons+=("$BJSON"); idx=$((idx + 1))
+done <<< "$claude_rows"
+claude_text="Claude 5h ${ctexts[0]} · wk ${ctexts[1]} (incl. Fable wk ${ctexts[2]})"
+claude_json=$(printf '{"five_hour":%s,"week":%s,"weekly_fable":%s,"stale":%s}' "${cjsons[0]}" "${cjsons[1]}" "${cjsons[2]}" "$stale")
+
+# Cache native readers only; explicit reader commands always run afresh.
+codex_cache_key="codex-$(printf %s "$CODEX_SESSIONS" | cksum | cut -d' ' -f1)"
+jules_cache_key="jules${JULES_DAILY_LIMIT}-${JULES_CONCURRENT_LIMIT}"
+reader_cache_load() {
+  local path="$KIT_HOME/cache/$1.json" age
+  [ -f "$path" ] || return 1
+  age=$((NOW - $(kit_mtime "$path")))
+  (( age >= 0 && age < 60 )) || return 1
+  kit_jq -e '.text | type == "string"' "$path" >/dev/null 2>&1
+}
+reader_cache_save() {
+  mkdir -p "$KIT_HOME/cache" || return
+  local tmp
+  tmp=$(mktemp "$KIT_HOME/cache/.quota.XXXXXX") || return
+  kit_jq -n --arg text "$2" --argjson data "$3" '{text:$text,data:$data}' > "$tmp" && mv "$tmp" "$KIT_HOME/cache/$1.json"
+  kit_python3 - "$KIT_HOME/cache/$1.json" "$NOW" <<'PYSTAMP'
+import os, sys
+try: os.utime(sys.argv[1], (int(sys.argv[2]), int(sys.argv[2])))
+except OSError: pass
+PYSTAMP
+}
 
 # ---- Codex: newest ~/.codex/sessions/**/*.jsonl line with rate_limits -
+codex_hit=0
+reader_cache_load "$codex_cache_key" && codex_hit=1
 codex_text='' codex_json='null'
-if [ "$prof_codex" != none ] && [ -d "$CODEX_SESSIONS" ]; then
+if [ "$prof_codex" != none ] && [ -z "${QUOTA_CODEX_CMD:-}" ] && [ "$codex_hit" -eq 0 ] && [ -d "$CODEX_SESSIONS" ]; then
   line=''
   # BSD stat (macOS) takes `-f '%m %N'`; GNU stat (Linux) takes `-c '%Y %n'`.
   case "$(uname)" in
@@ -188,12 +219,19 @@ if [ "$prof_codex" != none ] && [ -d "$CODEX_SESSIONS" ]; then
 fi
 if [ "$prof_codex" != none ] && [ -z "$codex_text" ]; then
   codex_text='Codex 5h – · wk –'
-  codex_json='{"five_hour":{"percent":null,"resets_epoch":null,"pace":null},"week":{"percent":null,"resets_epoch":null,"pace":null}}'
+  codex_json='{"five_hour":{"percent":null,"resets_epoch":null,"pace":null,"stale":false},"week":{"percent":null,"resets_epoch":null,"pace":null,"stale":false}}'
+fi
+
+if [ "$prof_codex" != none ] && [ -z "${QUOTA_CODEX_CMD:-}" ]; then
+  if [ "$codex_hit" -eq 1 ]; then
+    codex_text=$(kit_jq -r .text "$KIT_HOME/cache/$codex_cache_key.json")
+    codex_json=$(kit_jq -c .data "$KIT_HOME/cache/$codex_cache_key.json")
+  else reader_cache_save "$codex_cache_key" "$codex_text" "$codex_json"; fi
 fi
 
 # ---- Gemini: Antigravity /quota, cached for 60 seconds ------------------
 gemini_text='' gemini_json='null'
-if [ "$prof_gemini" != none ]; then
+if [ "$prof_gemini" != none ] && [ -z "${QUOTA_GEMINI_CMD:-}" ]; then
   gemini_text='Gemini 5h – · wk – · Argon wk – · 3p 5h – · 3p wk –'
   gemini_json='{"five_hour":null,"week":null,"argon_week":null,"third_party_five_hour":null,"third_party_week":null}'
   agy_bin=${KIT_AGY_BIN:-agy}
@@ -233,8 +271,16 @@ PYFETCH
     fi
   fi
   if [ -f "$cache" ]; then
-    parsed=$(kit_python3 - "$cache" <<'PYQUOTA'
-import datetime, json, sys
+    parsed=$(kit_python3 - "$cache" "$KIT_HOME/agy-usage-high.json" <<'PYQUOTA'
+import datetime, json, sys, fcntl, os, tempfile
+try:
+    lock = open(sys.argv[2] + '.lock', 'a')
+    fcntl.flock(lock, fcntl.LOCK_EX)
+except OSError: pass
+try:
+    seen = json.load(open(sys.argv[2]))
+    if not isinstance(seen, dict): seen = {}
+except (OSError, ValueError): seen = {}
 try:
     data = json.load(open(sys.argv[1]))
     buckets = {b['id']: b for g in data['command']['data']['groups'] for b in g['buckets']}
@@ -256,9 +302,25 @@ try:
                     suffix = fraction.find('-')
                 reset_text = prefix + (fraction[suffix:] if suffix >= 0 else '')
             reset = int(datetime.datetime.fromisoformat(reset_text).timestamp())
-            out.append(f'{(1-f)*100:.2f} {reset}')
+            used = (1-f)*100
+            old = seen.get(name)
+            try:
+                if abs(int(old['reset']) - reset) <= 120:
+                    used = max(used, float(old['used']))
+            except (KeyError, TypeError, ValueError): pass
+            seen[name] = dict(reset=reset, used=used)
+            out.append(f'{used:.2f} {reset}')
         except (ValueError, TypeError, KeyError, AttributeError):
             out.append('- -')
+    tmp = None
+    try:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(sys.argv[2]))
+        with os.fdopen(fd, 'w') as stream: json.dump(seen, stream)
+        os.replace(tmp, sys.argv[2])
+    except OSError:
+        if tmp:
+            try: os.unlink(tmp)
+            except OSError: pass
     print('\n'.join(out))
 except (OSError, ValueError, KeyError, TypeError):
     pass
@@ -281,9 +343,11 @@ PYQUOTA
   fi
 fi
 
-# ---- Jules: `jules remote list --session`, daily limit from profile or environment override (default 15) ----
+# ---- Jules: `jules remote list --session`, daily limit from profile or environment override (default 100) ----
+jules_hit=0
+reader_cache_load "$jules_cache_key" && jules_hit=1
 jules_text='' jules_json='null'
-if [ "$prof_jules" = true ]; then
+if [ "$prof_jules" = true ] && ! { [ -z "${QUOTA_JULES_CMD:-}" ] && [ "$jules_hit" -eq 1 ]; }; then
   jules_text='Jules 24h –'
   jules_json='{"used":null,"limit":null,"running":null,"concurrent_limit":null,"percent":null,"frees_at_epoch":null}'
   jules_bin=$(command -v jules 2>/dev/null || true)
@@ -292,7 +356,7 @@ if [ "$prof_jules" = true ]; then
       if [ -x "$candidate" ]; then jules_bin=$candidate; break; fi
     done
   fi
-  if [ -n "$jules_bin" ]; then
+  if [ -n "$jules_bin" ] && [ -z "${QUOTA_JULES_CMD:-}" ]; then
     # No coreutils `timeout` on a stock Mac: a hung jules must not hang the
     # quota line (or the Paseo pill), so a watchdog kills it after 10 s.
     jules_out=$(mktemp "${TMPDIR:-/tmp}/kit-quota-jules.XXXXXX")
@@ -380,6 +444,13 @@ if [ "$prof_jules" = true ]; then
   fi
 fi
 
+if [ "$prof_jules" = true ] && [ -z "${QUOTA_JULES_CMD:-}" ]; then
+  if [ "$jules_hit" -eq 1 ]; then
+    jules_text=$(kit_jq -r .text "$KIT_HOME/cache/jules${JULES_DAILY_LIMIT}-${JULES_CONCURRENT_LIMIT}.json")
+    jules_json=$(kit_jq -c .data "$KIT_HOME/cache/jules${JULES_DAILY_LIMIT}-${JULES_CONCURRENT_LIMIT}.json")
+  else reader_cache_save "$jules_cache_key" "$jules_text" "$jules_json"; fi
+fi
+
 # ---- Kimi/GLM: tokens and cost from the ledger since the 1st -----------
 ledger_summary() {
   kit_python3 - "$KIT_HOME/ledger.tsv" "$(date +%Y-%m-01)" "$1" <<'PY'
@@ -440,6 +511,193 @@ if [ "$prof_glm" = true ]; then
   glm_json=$(ledger_summary glm)
   glm_text=$(printf '%s' "$glm_json" | ledger_display GLM)
 fi
+
+# Explicit reader commands use the portable whitespace protocol.
+for lane in codex gemini; do
+  case "$lane" in
+    codex) cmd=${QUOTA_CODEX_CMD:-}; enabled=$prof_codex; keys='five_hour week';;
+    gemini) cmd=${QUOTA_GEMINI_CMD:-}; enabled=$prof_gemini; keys='five_hour week argon_week third_party_five_hour third_party_week';;
+  esac
+  [ -n "$cmd" ] && [ "$enabled" != none ] || continue
+  output=$("$cmd" 2>/dev/null) || output=''
+  read -r -a cells <<< "$output"
+  idx=0; obj='{}'; texts=()
+  for key in $keys; do
+    window=604800
+    case "$key" in five_hour|third_party_five_hour) window=18000;; esac
+    bucket "${cells[$idx]:--}" "${cells[$((idx+1))]:--}" "$window"
+    obj=$(printf '%s' "$obj" | kit_jq -c --arg key "$key" --argjson b "$BJSON" '. + {($key):$b}')
+    texts+=("$BTEXT"); idx=$((idx+2))
+  done
+  if [ "$lane" = codex ]; then
+    codex_json=$obj; codex_text="Codex 5h ${texts[0]} · wk ${texts[1]}"
+  else
+    gemini_json=$obj; gemini_text="Gemini 5h ${texts[0]} · wk ${texts[1]} · Argon wk ${texts[2]} · 3p 5h ${texts[3]} · 3p wk ${texts[4]}"
+  fi
+done
+if [ -n "${QUOTA_JULES_CMD:-}" ] && [ "$prof_jules" = true ]; then
+  output=$("$QUOTA_JULES_CMD" 2>/dev/null) || output=''
+  read -r used limit running concurrent frees extra <<< "$output"
+  if [[ $used =~ ^[0-9]+$ && $limit =~ ^[1-9][0-9]*$ && $running =~ ^[0-9]+$ && $concurrent =~ ^[1-9][0-9]*$ && ( $frees = - || $frees =~ ^[0-9]+$ ) && -z $extra ]]; then
+    pct=$((used*100/limit)); flag=''
+    (( pct >= 80 || running >= concurrent )) && flag=' !'
+    jules_text="Jules 24h $pct% ($used/$limit, $running running)$flag"
+    jules_json=$(printf '{"used":%s,"limit":%s,"running":%s,"concurrent_limit":%s,"percent":%s,"frees_at_epoch":%s}' "$used" "$limit" "$running" "$concurrent" "$pct" "${frees/-/null}")
+  fi
+fi
+
+codex_live_resets() {
+  mkdir -p "$KIT_HOME/cache"
+  CODEX_RESETS_CACHE_PATH="$KIT_HOME/cache/codex-resets.cache" kit_python3 - <<'PYLIVE'
+import json, os, shlex, signal, subprocess, sys, threading, time
+
+TTL, TIMEOUT = 600, 15
+cache = os.environ["CODEX_RESETS_CACHE_PATH"]
+
+def valid(s):
+    p = s.split()
+    return len(p) == 2 and p[0].isdigit() and (p[1] == "-" or p[1].isdigit())
+
+try:
+    age = time.time() - os.stat(cache).st_mtime
+    if 0 <= age < TTL:
+        s = open(cache).read().strip()
+        if valid(s):
+            print(s); sys.exit(0)
+except OSError:
+    pass
+
+cmd = shlex.split(os.environ.get("CODEX_RESETS_CMD") or "codex app-server")
+try:
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, start_new_session=True, text=True)
+except OSError:
+    sys.exit(1)
+
+def kill():
+    try: os.killpg(proc.pid, signal.SIGKILL)
+    except OSError: pass
+
+timer = threading.Timer(TIMEOUT, kill); timer.daemon = True; timer.start()
+
+def send(obj):
+    proc.stdin.write(json.dumps(obj) + "\n"); proc.stdin.flush()
+
+def read_reply(want):
+    for line in proc.stdout:
+        try: msg = json.loads(line)
+        except ValueError: continue
+        if isinstance(msg, dict) and msg.get("id") == want:
+            return msg
+    return None
+
+result = None
+try:
+    send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+          "params": {"clientInfo": {"name": "quota", "version": "0"}}})
+    if read_reply(1) is not None:
+        send({"jsonrpc": "2.0", "method": "initialized"})
+        send({"jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read", "params": None})
+        result = read_reply(2)
+except (OSError, ValueError):
+    result = None
+finally:
+    timer.cancel(); kill()
+    try: proc.wait(timeout=2)
+    except Exception: pass
+
+try:
+    res = result["result"]
+    cr = res.get("rateLimitResetCredits")
+    if not isinstance(cr, dict):
+        sys.exit(1)   # null = backend didn't say; unknown, never "0", and not cached
+    credits = cr.get("credits") or []
+    exp = [c["expiresAt"] for c in credits
+           if isinstance(c, dict) and c.get("status") == "available"
+           and isinstance(c.get("expiresAt"), (int, float)) and not isinstance(c.get("expiresAt"), bool)]
+    count = cr.get("availableCount")
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        count = len(exp)   # the API's own total wins; the list may be capped
+    out = f"{count} {int(min(exp)) if exp else '-'}" if count else "0 -"
+except (TypeError, KeyError, AttributeError, ValueError):
+    sys.exit(1)
+
+tmp = f"{cache}.tmp.{os.getpid()}"
+try:
+    with open(tmp, "w") as f: f.write(out + "\n")
+    os.replace(tmp, cache)
+except OSError:
+    pass
+print(out)
+PYLIVE
+}
+
+# Reset overrides are explicit readers; default reset sources are added separately.
+for lane in claude codex; do
+  case "$lane" in
+    claude) cmd=${QUOTA_CLAUDE_RESETS_CMD:-}; enabled=$prof_claude_plan;;
+    codex) cmd=${QUOTA_CODEX_RESETS_CMD:-}; enabled=$prof_codex;;
+  esac
+  [ "$enabled" != none ] || continue
+  if [ -n "$cmd" ]; then
+    output=$("$cmd" 2>/dev/null) || output=''
+  elif [ "$lane" = claude ]; then
+    resets_path=$(kit_jq -r '.claude_resets_file // ""' "$PROFILE_PATH" 2>/dev/null)
+    output=$(kit_python3 - "${resets_path:-$KIT_HOME/claude-resets.json}" "$NOW" <<'PYFILE'
+import json, sys, os
+try:
+    rows = json.load(open(os.path.expanduser(sys.argv[1])))['resets']
+    if not isinstance(rows, list): raise ValueError()
+    for r in rows:
+        if r['type'] not in ('weekly', 'fable') or isinstance(r['expires'], bool) or not isinstance(r['expires'], (int, float)): raise ValueError()
+    live = [r for r in rows if r['expires'] > int(sys.argv[2])]
+    label = '+'.join(str(sum(r['type'] == t for r in live)) + t for t in ('weekly', 'fable'))
+    print(len(live), int(min(r['expires'] for r in live)) if live else '-', label)
+except (OSError, ValueError, KeyError, TypeError): pass
+PYFILE
+)
+  else
+    output=$(cd "$HOME" 2>/dev/null || cd /; codex_live_resets)
+  fi
+  reset_data=$(kit_python3 - "$lane" "$output" <<'PYRESET'
+import datetime, json, re, sys
+lane, output = sys.argv[1:]
+parts = output.split()
+obj = dict(available=None, next_expiry_epoch=None)
+if lane == 'claude': obj.update(weekly=None, fable=None)
+text = '' if lane == 'claude' else ' · resets ?'
+if 2 <= len(parts) <= (3 if lane == 'claude' else 2) and parts[0].isdigit() and (parts[1] == '-' or parts[1].isdigit()):
+    n = int(parts[0]); expiry = None if parts[1] == '-' else int(parts[1])
+    obj.update(available=n, next_expiry_epoch=expiry)
+    detail = []
+    if lane == 'claude':
+        label = parts[2] if len(parts) == 3 else ''
+        for key in ('weekly', 'fable'):
+            match = re.search(r'(?:^|\+)([0-9]+)' + key + r'(?:$|\+)', label)
+            obj[key] = int(match[1]) if match else 0
+            if obj[key]: detail.append(str(obj[key]) + ' ' + ('Fable' if key == 'fable' else key))
+    if expiry is not None:
+        try: date = datetime.datetime.fromtimestamp(expiry).strftime('%d %b').lstrip('0')
+        except (ValueError, OverflowError, OSError): date = ''
+        if date: detail = [', '.join(detail) + ('; ' if detail else '') + 'next expires ' + date]
+    text = ''
+    if n:
+        text = ' · ' + str(n) + (' reset banked' if n == 1 else ' resets banked')
+        if detail: text += ' (' + ', '.join(detail) + ')'
+print(json.dumps(obj))
+print(text)
+PYRESET
+)
+  reset_json=$(printf '%s\n' "$reset_data" | head -1)
+  reset_text=$(printf '%s\n' "$reset_data" | sed -n '2p')
+  if [ "$lane" = claude ]; then
+    claude_json=$(printf '%s' "$claude_json" | kit_jq -c --argjson r "$reset_json" '. + {resets:$r}')
+    claude_text="$claude_text$reset_text"
+  else
+    codex_json=$(printf '%s' "$codex_json" | kit_jq -c --argjson r "$reset_json" '. + {resets:$r}')
+    codex_text="$codex_text$reset_text"
+  fi
+done
 
 # ---- assemble ----------------------------------------------------------
 # A profile with no Claude plan leaves Claude out entirely.

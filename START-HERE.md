@@ -305,7 +305,9 @@ shows how much of each plan is used. If yes:
 paseo plugin install https://github.com/Jakobuus/claude-routing-kit.git --path paseo-pill
 kit-profile set paseo true
 ```
-Otherwise `kit-profile set paseo false`.
+Otherwise `kit-profile set paseo false`. The `paseo` key only turns the pill on; it does not change
+how builds run. If they also want Codex builds to go through Paseo, run
+`kit-profile set codex_build_transport paseo` (the default is `direct`).
 
 ## Step 6: Safety notes
 
@@ -445,7 +447,15 @@ Show them, briefly:
    printed a trust warning; see step 7). From then on they load by themselves at the start of every session. Check once: in the
    new session, ask "Which model do you send a read-only lookup to?" The answer should match the
    Read-only lookups row of the table. If it does not, the rules did not load: go back to step 7.
-5. **How to see usage:** `kit-quota`.
+5. **How to see usage:** `kit-quota`. See [Usage and build commands](README.md#usage-and-build-commands)
+   for optional Claude database and banked-reset settings, stale readings, Jules limits,
+   and the Codex/Gemini build flags and exit codes. Codex builds go through Paseo by default
+   only when the profile has `"codex_build_transport": "paseo"` (default `direct`); `--paseo` and
+   `--no-paseo` override it. Build copies are deleted once their work is saved; otherwise they are kept, in
+   `retained` (see `kit-retained`) or, for refused or pending runs, in their run folder.
+   Blocking guards get 10 seconds each; `hook-errors.log` entries have timestamps.
+   With Gemini available, the "Exploration, big reads" row uses its research model to write a
+   summary of facts and decide nothing.
 6. **How to update.** Claude Code:
    ```
    claude plugin update routing-kit@routing-kit
@@ -456,6 +466,7 @@ Show them, briefly:
    kit-install-rules --agent codex
    ```
    (use `--agent gemini` for Gemini).
+   Every user must run `kit-sync hooks` after updating to refresh hook timeouts.
    Then run `kit-sync all` again. Do the same after changing private/rules.md or their plans; edit that file, never the block between the routing-kit:rules lines.
    Then start a new session. The Paseo pill, if they have it, updates on its own:
    ```

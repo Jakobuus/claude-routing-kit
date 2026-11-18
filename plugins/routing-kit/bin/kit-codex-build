@@ -5,18 +5,39 @@
 #   run_export -> codex exec -m MODEL --dangerously-bypass-approvals-and-sandbox -C wt < brief
 #   -> print the diff and run dir -> ledger_append codex
 #
-# The repo copy is deleted when the run ends, on every exit path. The result
-# is <run dir>/build.patch (apply it with `git apply`); ROUTING_KIT_KEEP_RUNS=1
-# keeps the copy for debugging.
+# The repo copy leaves the run dir when the run ends, on every exit path. It is DELETED when its work
+# is saved: build.patch is saved and applies to the base commit (or the run is a checked "no
+# changes"), nothing in the copy is outside the patch (an ignored file, a file written after the
+# patch), and no agent is still open in it. Otherwise it is moved whole to
+# $KIT_HOME/retained/<run dir name> with the reason (list and delete those with kit-retained).
+# The result is <run dir>/build.patch (apply it with `git apply`);
+# ROUTING_KIT_KEEP_RUNS=1 keeps the copy in place for debugging.
 # A copy holding a nested git repo, a FIFO or a hard-linked file is refused (exit 4).
 #
-# No Paseo dependency: when this runs as a background Bash job, the user
-# still sees it, since Claude is what's driving it. This script never
-# merges; the caller reviews the printed diff.
-#
-# Exit: 0 ok · 2 bad input or dirty repo · 3 no codex on PATH ·
-# 4 provider/API error (codex exec failed, or a git stage/diff step after
-# it failed) · 5 secret scan refused.
+# Transport: profile key "codex_build_transport" ("paseo" or "direct"; default direct) picks the
+# default; --paseo / --no-paseo override it. The profile key "paseo" is the Paseo usage-pill flag
+# and does not change builds.
+# Usage also accepts [--paseo|--no-paseo] [--timeout SECS >= 1 (Paseo only)].
+# Pending Paseo runs keep their copy until cleanup can safely finish.
+# A finished Paseo run has its copy deleted (or moved to retained, as above) and its workspace and
+# agent archived, but only after build.patch is saved and checked against the base commit; otherwise
+# the copy stays ("pending").
+# Neither is archived while other open agents (child agents, agents in the same folder) would go too.
+# The copy and the workspace go only when the single workspace on the copy is the one recorded at
+# the start, inside $KIT_HOME/runs (KIT_CODEX_WORKTREES_ROOT overrides that root).
+# The line before the last says what was archived; a later run retries what is still pending.
+# The checked build is also kept as branch kit-codex/<run dir name> in REPO (one commit on the base
+# commit; nothing is checked out), and the manifest names it.
+# KIT_CODEX_KEEP_WORKTREE=1 keeps the copy and the agent; the last line then ends with
+# worktree=<path>, as it does whenever the copy stays.
+# A copy whose git metadata the agent rewrote (.git made a link or a gitfile, a commondir, gitdir
+# or config.worktree file added) is kept with its patch and not archived: "git metadata changed".
+# Each run first finishes earlier pending runs and archives stopped agents of finished earlier runs
+# (only agents its own manifests name, with the recorded cwd); runs under a temp dir are left alone.
+# Exit: 0 success, 2 bad input, 3 missing provider, 4 provider/cleanup error,
+# 5 secret scan refused, 6 waiting on permission (agent and copy kept), 124 timeout.
+# Every exit after the run dir exists ends with `kit-codex-build: exit=N patch=PATH result=PATH`
+# (patch= is empty when there is none).
 set -uo pipefail
 
 BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
@@ -34,11 +55,32 @@ kit_require_python3
 MODELS_FILE="$BIN_DIR/../rules/models.json"
 REPO="" NAME="" BRIEF="" MODEL=""
 PASEO=0
-usage() { kit_die 2 "usage: kit-codex-build --repo DIR --name NAME --brief FILE [--model MODEL]"; }
+TIMEOUT=1800
+TIMEOUT_SET=0
+if [ -f "$KIT_HOME/profile.json" ]; then
+  if profile_transport=$(kit_jq -r '.codex_build_transport // "direct"' "$KIT_HOME/profile.json" 2>/dev/null); then
+    [ "$profile_transport" != paseo ] || PASEO=1
+  else
+    echo 'kit-codex-build: warning: cannot read profile; using direct transport unless overridden' >&2
+  fi
+fi
+usage() { kit_die 2 "usage: kit-codex-build --repo DIR --name NAME --brief FILE [--model MODEL] [--paseo|--no-paseo] [--timeout SECS]"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --help|-h)
+      echo "usage: kit-codex-build --repo DIR --name NAME --brief FILE [--model MODEL] [--paseo|--no-paseo] [--timeout SECS]"
+      echo "transport: direct Codex by default; Paseo when the profile key codex_build_transport is \"paseo\""
+      echo "           (kit-profile set codex_build_transport paseo|direct). --paseo / --no-paseo override it."
+      echo "           The profile key \"paseo\" is the Paseo usage-pill flag and does not change builds."
+      exit 0 ;;
     --paseo) PASEO=1; shift ;;
+    --no-paseo) PASEO=0; shift ;;
+    --timeout)
+      [ $# -ge 2 ] || usage
+      case "$2" in ""|*[!0-9]*) usage ;; esac
+      [ "$2" -ge 1 ] 2>/dev/null || usage
+      TIMEOUT=$2; TIMEOUT_SET=1; shift 2 ;;
     --repo)
       [ $# -ge 2 ] || usage
       REPO=$2; shift 2 ;;
@@ -54,6 +96,8 @@ while [ $# -gt 0 ]; do
     *) usage ;;
   esac
 done
+
+[ "$TIMEOUT_SET" = 0 ] || [ "$PASEO" = 1 ] || usage
 
 [ -n "$REPO" ] && [ -n "$NAME" ] && [ -n "$BRIEF" ] || usage
 
@@ -77,9 +121,10 @@ esac
 # kit_die (i.e. exit) if it can't create $KIT_HOME, and without the
 # subshell that exit would overwrite the status this trap is supposed to
 # be preserving. A warning goes to stderr instead; the original exit code
-# always wins. The repo copy is deleted here too (run_cleanup never fails and
+# always wins. The repo copy is cleared here too: deleted when its work is saved, moved to
+# $KIT_HOME/retained otherwise (run_cleanup_own never fails and
 # only touches the run dir's wt/home/cfg/tmp); run_dir is still empty on
-# exits before run_export, and run_cleanup does nothing for an empty path.
+# exits before run_export, and it does nothing for an empty path.
 codex_pid=""
 on_exit() {
   code=$?
@@ -94,12 +139,51 @@ on_exit() {
       wait "$codex_pid"
     } 2>/dev/null
   fi
-  if [ -n "${paseo_agent:-}" ]; then
-    codex_paseo_cleanup || code=4
+  [ -z "${paseo_head_copy:-}" ] || rm -rf "$paseo_head_copy" 2>/dev/null
+  if [ -n "${paseo_started:-}" ]; then
+    # A Paseo run with an agent: codex_paseo_finalize deletes (or retains) the repo copy and archives the
+    # workspace and the agent only after build.patch is saved and checked and the ownership checks
+    # pass. A kept run, a permission wait and a start that went wrong are left as they are.
+    if [ "${KIT_CODEX_KEEP_WORKTREE:-}" = 1 ]; then
+      paseo_cleanup=kept
+    elif [ "${paseo_pending:-false}" = true ]; then
+      paseo_cleanup=pending
+    else
+      codex_paseo_finalize || { [ "$code" -ne 0 ] || code=4; }
+    fi
+  elif [ -n "${run_dir:-}" ]; then
+    # Deletes the copy when its work is saved (lib/export.sh); moves it to $KIT_HOME/retained otherwise.
+    # (c) for a direct run: no process may still be in the copy (a child that left Codex's group).
+    if [ -d "$run_dir/wt" ] && open_why=$(run_copy_busy "$run_dir"); then :; else open_why=""; fi
+    run_cleanup_own "$run_dir" "kit-codex-build ended (exit $code)" "$REPO" "$BASE" "$open_why" || true
+    if [ "$code" -ne 0 ] && [ -s "$run_dir/retained-at" ]; then
+      echo "kit-codex-build: repo copy retained: $(cat "$run_dir/retained-at")" >&2
+    fi
   fi
   ( ledger_append codex "${MODEL:--}" "$NAME" - - "$code" ) \
     || echo "kit-codex-build: warning: could not write a ledger line" >&2
-  [ -n "${run_dir:-}" ] && { run_cleanup "$run_dir" || true; }
+  if [ -z "${paseo_started:-}" ] && [ -n "${run_dir:-}" ] && [ -d "$run_dir" ]; then
+    # Direct mode: the same last line as Paseo, on every exit once a run exists.
+    direct_patch=""
+    [ ! -f "$run_dir/build.patch" ] || direct_patch=$run_dir/build.patch
+    echo "kit-codex-build: exit=$code patch=$direct_patch result=$run_dir/codex-output.txt"
+  fi
+  if [ -n "${paseo_started:-}" ]; then
+    [ -f "$run_dir/result.md" ] || echo "(no final message from Codex; exit $code)" > "$run_dir/result.md"
+    paseo_patch=""
+    [ ! -f "$run_dir/build.patch" ] || paseo_patch=$run_dir/build.patch
+    codex_paseo_manifest "$code"
+    # A copy that stays is named on the last line too, after the patch and the result.
+    paseo_kept=""
+    if [ -e "$run_dir/wt" ]; then
+      if [ "${KIT_CODEX_KEEP_WORKTREE:-}" = 1 ]; then
+        paseo_kept=" worktree=$run_dir/wt (worktree kept: KIT_CODEX_KEEP_WORKTREE=1)"
+      else
+        paseo_kept=" worktree=$run_dir/wt (worktree kept: ${paseo_kept_why:-cleanup ${paseo_cleanup:-pending}})"
+      fi
+    fi
+    echo "kit-codex-build: exit=$code patch=$paseo_patch result=$run_dir/result.md$paseo_kept"
+  fi
   exit "$code"
 }
 trap on_exit EXIT
@@ -110,7 +194,7 @@ if [ -z "$MODEL" ]; then
 fi
 
 if [ "$PASEO" = 1 ]; then
-  . "$BIN_DIR/../lib/codex-paseo.sh"
+  . "$BIN_DIR/../lib/codex-paseo-build.sh"
   trap 'exit 130' INT
   trap 'exit 143' TERM
   codex_paseo_build
@@ -167,6 +251,7 @@ fi
 if command -v caffeinate >/dev/null 2>&1; then
   caffeinate -is -w $$ >/dev/null 2>&1 &
 fi
+run_agent_started "$run_dir" || kit_die 4 'could not mark the run as started'
 set -m
 KIT_ROLE=worker codex exec -m "$MODEL" --dangerously-bypass-approvals-and-sandbox -C "$wt" < "$brief_snapshot" > "$run_dir/codex-output.txt" 2>&1 &
 codex_pid=$!
@@ -184,7 +269,7 @@ set +m
 
 if [ "$codex_code" -ne 0 ]; then
   cat "$run_dir/codex-output.txt" >&2
-  # codex may have edited files before it failed. wt is deleted when the run
+  # codex may have edited files before it failed. wt leaves the run dir when the run
   # ends, so keep those edits as a patch, best effort, with the same git
   # safeguards as the success path below.
   salvage=""
@@ -204,3 +289,4 @@ run_build_patch_fresh "$wt" "$REPO" "$BASE" || exit 4
 cat "$run_dir/build.patch"
 echo "kit-codex-build: run dir: $run_dir"
 echo "kit-codex-build: build patch: $run_dir/build.patch"
+# The last line (exit=0 patch=... result=...) is printed by the exit trap, like on every other exit.

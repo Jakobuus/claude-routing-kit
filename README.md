@@ -30,6 +30,29 @@ Set up https://github.com/Jakobuus/claude-routing-kit for me
 - **What it needs.** One of the three agents on macOS, Linux, or Windows through WSL2. Everything
   else is optional.
 
+## Everything it does
+
+- Shares one source of rules across Claude Code, Codex and Gemini in Antigravity.
+- Gives you a routing table for which model does each job. Usage readings help choose between eligible models and spread work across plans.
+- Offers guards that block destructive commands and protect folders you choose. You decide whether to turn them on.
+- Gives your agents a board for notes, claims and messages, so they can coordinate.
+- Suggests tools for media and document jobs based on what you have available.
+- Shows usage and reset information across your enabled plans with `kit-quota`.
+- Hands builds to Codex, Gemini or Jules and saves a patch you can review.
+- Checks the kit's health with `kit-doctor` and lets you undo shared rules, skills and hooks.
+
+## How you use it
+
+1. Give [START-HERE](START-HERE.md) to your agent to install the kit. Answer questions about your plans, helpers and guards.
+2. Start a new session. Your agent receives your routing table and any health or board notices at the start; ask it to show them when you want to see them.
+3. Work as usual. Your agent loads the rules, and the guards you enabled check commands as it works.
+4. Ask your agent to hand off a build. It can use `kit-codex-build`, `kit-gemini-build` or `kit-jules-build`. Review the patch, apply it in a test checkout, and run your checks before you commit or merge.
+5. Run `kit-quota` to see usage. Run `kit-quota --pick "Read-only lookups"` to choose an eligible model for that row.
+6. Agents can leave notes with `kit-board post` or send messages with `kit-board send --to TARGET TEXT`. Use `kit-board read` to read the board.
+7. For Claude Code, update with `claude plugin update routing-kit@routing-kit`, then run `kit-sync all` and start a new session. Run `kit-doctor` to check health. Use `kit-sync all --undo` to remove the shared rules, skills and hooks.
+
+Details: [What you get in 0.4](#what-you-get-in-04) · [Usage and build commands](#usage-and-build-commands) · [START-HERE](START-HERE.md)
+
 ## What you get in 0.4
 
 Claude Code, Codex or Antigravity can lead (Antigravity as lead is not tested end to end yet). Setup asks what plans and models you have and which agent should lead. Claude is the default.
@@ -43,6 +66,101 @@ Claude Code, Codex or Antigravity can lead (Antigravity as lead is not tested en
 Setup offers two guards: one against destructive commands, and one that stops agents working in other repos from editing files in folders you name as your own (`kit-profile set owner_checkouts '["/path"]'`). Both are off unless you say yes; they are a seatbelt against agent mistakes, not a security boundary. Codex: `kit-sync hooks` runs the hooks selftest and, only if it passes, marks the kit hooks trusted in Codex (one marked block at the end of `$CODEX_HOME/config.toml`, by default `~/.codex/config.toml`), so they also run in `codex exec`. A failed selftest or `--undo` removes that block if it is still the exact last part of the file; otherwise kit-sync says so and you remove it by hand. If kit-sync prints a trust warning, check `/hooks` in Codex.
 
 Your private rules belong in `~/.config/routing-kit/private/rules.md` (or `$ROUTING_KIT_HOME/private/rules.md` if you set ROUTING_KIT_HOME). When migrating, move your text there by hand and empty the old file before running `kit-sync rules`. Run `kit-profile set kit_rules replace` only once the private file holds your full rules. The kit then keeps only its own board and media section and the routing table.
+
+## Usage and build commands
+
+### kit-quota
+
+Shows plan usage so work can go to the plan with room left. Fable's cap sits inside
+Claude's week: it is not extra headroom. Readings older than 30 minutes show `(stale)`.
+
+| Setting | Default and purpose |
+|---|---|
+| Profile `claude_usage_db`, or `QUOTA_CLAUDE_DB` | Optional Claude usage database; unset uses the status-line readings. The environment setting takes priority. |
+| `QUOTA_STALE_SECS` | 1800 seconds before a reading is stale. |
+| Profile `claude_resets_file` | Optional JSON file for banked Claude resets; Codex banked resets are read live. |
+| Profile `jules_daily_limit` | 100 jobs per day; set it to your Jules plan's limit. |
+| `QUOTA_*` test stubs | `QUOTA_CODEX_CMD`, `QUOTA_GEMINI_CMD`, `QUOTA_JULES_CMD` replace provider reads; `QUOTA_CLAUDE_RESETS_CMD` and `QUOTA_CODEX_RESETS_CMD` replace reset reads. `QUOTA_NOW` fixes the clock for tests. Leave these unset for normal use. |
+
+### kit-codex-build
+
+Builds from committed HEAD and saves `build.patch` for review. Direct Codex is the default; Paseo
+is the default only when the profile key `codex_build_transport` is `paseo`
+(`kit-profile set codex_build_transport paseo|direct`). The profile key `paseo` is only the
+Paseo-pill flag and does not change builds. `--paseo` and `--no-paseo` override the setting.
+Each Paseo run writes `result.md`, `log.txt` and `manifest.json` with its status, paths and
+cleanup details; `exit` in the manifest is a number. Nothing is archived before the patch is
+saved and checked. The copy is then deleted, or moved to `retained` if something in it is not
+saved (see kit-retained). The checked build is also kept as the branch `refs/heads/kit-codex/<run>` in the
+source repo. Every exit after the run folder exists ends with
+`kit-codex-build: exit=N patch=PATH result=PATH`. A commit you make in the repo while a build
+runs does not break it. A Paseo run also keeps a short-lived `head-*` copy in the kit home, which a
+later run removes if it is more than a day old. The brief is copied first, and that copy is scanned
+and sent. Verified once with a real Paseo run: a `CLAUDE_*` variable exported by the caller did
+not reach the agent.
+
+| Flag, setting or exit | Meaning |
+|---|---|
+| `--paseo` / `--no-paseo` | Override `codex_build_transport` (`--paseo` for this run, `--no-paseo` for direct Codex). |
+| `--timeout SECS` | Paseo wait limit, positive seconds; timeout exits 124. |
+| `KIT_CODEX_KEEP_WORKTREE=1` | Keep the Paseo agent and copy for inspection. The final line names the kept copy. |
+| `KIT_CODEX_WORKTREES_ROOT` | Test knob. The Paseo workspace and agent are archived only for a copy inside this folder (default: the kit's `runs` folder); a copy outside it stays and the run stays pending. |
+| Exit 0 | Success. |
+| Exit 2 | Bad input. |
+| Exit 3 | Missing provider or required tool. |
+| Exit 4 | Provider or cleanup error, including an unsafe copy. |
+| Exit 5 | Secret scan refused the build. |
+| Exit 6 | Waiting on permission; the agent is left running and its copy is kept in place. |
+| Exit 124 | Timeout. |
+
+New Paseo runs retry cleanup of earlier pending runs and retire stopped agents from finished
+runs, using their recorded identity and folder. Runs under temporary folders are skipped.
+If cleanup cannot be confirmed safe, the copy stays and the manifest records why.
+
+### kit-gemini-build
+
+Builds with Antigravity and saves a patch plus a manifest. When there is a checked patch, the
+build is also kept as the branch `refs/heads/kit-gemini/<run>` in the source repo (one commit on the base
+commit; your working tree and index are not touched), and the manifest key `branch` names it;
+refused runs make no branch. Empty answers and failed or unreadable responses are reported as
+failures; saved answers and error output help explain why. Refused builds keep their copy where
+it is and print its path.
+
+| Flag or setting | Default and purpose |
+|---|---|
+| `--repo DIR` | Required; may name the repo root or a subfolder. Builds from committed HEAD. |
+| `--effort E` | Optional; passed to Antigravity. Unset leaves its default. |
+| `--timeout SECS` | 1800 seconds. |
+| `KIT_AGY_IDLE_SECS` | 900 seconds (15 minutes) without changes to worktree files or captured output before stopping the process group and saving its patch. |
+| `KIT_AGY_TIMEOUT_GRACE` | 60 seconds beyond the requested timeout before the wrapper stops the process. |
+
+### kit-retained
+
+A build copy is deleted as soon as its work is saved. For Codex, Gemini and the Kimi/GLM lane
+that means all of: `build.patch` is saved and applies to the base commit (or the run is a checked
+"no changes"); staging the copy again gives the same patch byte for byte, nothing git ignores
+was added, nothing is unreadable, and the copy's own `.git` has no stash or extra branch; and
+nothing is still working in it (Paseo: no open agent or child agent of the run; direct Codex and
+Gemini: also no process with its folder or a file open in the copy, checked with `lsof`; Kimi/GLM:
+the jail has ended). Otherwise the copy is kept: moved whole to the `retained` folder in the kit
+home with a `.why` note that says why, or, for refused, pending or explicitly kept runs, left in
+place in its run folder (`runs/<run>/wt`, the manifest says why). Copies no agent was started in
+are deleted. Agents run unconfined and could tamper with the run folder, so these checks are a
+safety net, not a guarantee. `kit-retained` lists and prunes only the copies under `retained`, which
+go only when you say so (copies left in a run folder are not managed by it); `kit-doctor` reports how many there are and their size. `kit-selftest`
+removes the copies of its own runs.
+
+```
+kit-retained list
+kit-retained prune --older-than DAYS
+```
+
+`DAYS` is required, a whole number of 1 or more; there is no default. A copy without a
+readable retention time is never pruned.
+
+Blocking hook guards get 10 seconds each. Lines in `hook-errors.log` include timestamps.
+With Gemini available, **Exploration, big reads** goes to the Gemini research model:
+it writes a summary of facts and decides nothing. The routing table names the available model.
 
 ## What is new in 0.3
 
@@ -158,7 +276,7 @@ and may train on it. So the kit only ever runs them inside the macOS sandbox, th
 - They see a fresh copy of your committed code and nothing else: not your home folder, your keys,
   or files git ignores.
 The patch is built from a fresh clone of your repo and a private snapshot of the helper's output after the helper has stopped, so a helper's leftovers cannot change the patch. Codex and Gemini themselves run with full access to your machine under your own account; Kimi and GLM run locked in the Mac's sandbox.
-- The copy is deleted when the job ends. What you keep is a patch file (`build.patch`, in the
+- The copy is deleted when the job ends if its work is saved (otherwise it goes to `retained`, see kit-retained). What you keep is a patch file (`build.patch`, in the
   job's run folder under `~/.config/routing-kit/runs`); apply it with `git apply`. Set
   `ROUTING_KIT_KEEP_RUNS=1` to keep the copy for debugging.
   A build that leaves a nested git repo (submodules), a FIFO or a hard-linked file in the copy is refused.

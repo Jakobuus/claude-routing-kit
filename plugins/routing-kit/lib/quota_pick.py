@@ -35,8 +35,8 @@ for lane in ('claude', 'codex', 'gemini'):
         if lane == 'claude' and (week.get('percent') or 0) >= 100:
             continue
         if model == models['claude']['top']:
-            fable = reading.get('fable') or {}
-            if fable.get('percent') is None or fable['percent'] >= 100:
+            fable = reading.get('weekly_fable') or {}
+            if fable.get('stale') or fable.get('percent') is None or fable['percent'] >= 100:
                 continue
         if lane == 'gemini' and 'argon' in model:
             week = reading.get('argon_week') or {}

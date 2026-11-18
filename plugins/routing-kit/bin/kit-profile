@@ -25,6 +25,8 @@ valid_value() {
   key="$1"; value="$2"
   case "$key" in
     owner_name) return 0 ;;
+    claude_usage_db|claude_resets_file) [ -n "$value" ] ;;
+    codex_build_transport) case "$value" in paseo|direct) return 0 ;; *) return 1 ;; esac ;;
     kit_rules) case "$value" in append|replace) return 0 ;; *) return 1 ;; esac ;;
     claude_plan) case "$value" in none|pro|max5|max20|team|api) return 0 ;; *) return 1 ;; esac ;;
     main_agent) case "$value" in claude|codex|gemini) return 0 ;; *) return 1 ;; esac ;;
@@ -34,7 +36,7 @@ valid_value() {
     owner_checkouts|protected_paths) printf '%s' "$value" | kit_jq -e 'type == "array" and all(.[]; type == "string")' >/dev/null 2>&1; return $? ;;
     blocks) printf '%s' "$value" | kit_jq -e 'type == "boolean" or (type == "object" and all(to_entries[]; if .key == "destructive" or .key == "owner_checkout" then (.value | type == "boolean") else true end))' >/dev/null 2>&1; return $? ;;
     version) case "$value" in 1) return 0 ;; *) return 1 ;; esac ;;
-    jules_daily_limit) case "$value" in ''|*[!0-9]*|0) return 1 ;; *) return 0 ;; esac ;;
+    jules_daily_limit) case "$value" in ''|*[!0-9]*|0|0[0-9]*) return 1 ;; *) return 0 ;; esac ;;
     *) return 1 ;;
   esac
 }
@@ -107,6 +109,9 @@ cmd_validate() {
     (.version == 1) and
     ((has("blocks") | not) or (.blocks | type == "boolean" or (type == "object" and all(to_entries[]; if .key == "destructive" or .key == "owner_checkout" then (.value | type == "boolean") else true end)))) and
     ((has("owner_name") | not) or (.owner_name | type == "string")) and
+    ((has("claude_usage_db") | not) or (.claude_usage_db | type == "string" and length > 0)) and
+    ((has("claude_resets_file") | not) or (.claude_resets_file | type == "string" and length > 0)) and
+    ((has("codex_build_transport") | not) or (.codex_build_transport == "paseo" or .codex_build_transport == "direct")) and
     ((has("kit_rules") | not) or (.kit_rules == "append" or .kit_rules == "replace")) and
     ((.main_agent // "claude") as $m | (["claude","codex","gemini"] | index($m) != null)) and
     ((.claude_plan // "") as $c | (.main_agent // "claude") as $m |

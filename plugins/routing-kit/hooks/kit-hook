@@ -10,7 +10,7 @@ if [ "$code" -eq 0 ]; then
   [ -z "$out" ] || printf '%s\n' "$out"
   exit 0
 fi
-{ mkdir -p "$KIT_HOME" && printf 'kit-hook %s: dispatcher exited %s, allowing\n' "$*" "$code" >> "$KIT_HOME/hook-errors.log"; } 2>/dev/null
+{ mkdir -p "$KIT_HOME" && printf '%s kit-hook %s: dispatcher exited %s, allowing\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" "$code" >> "$KIT_HOME/hook-errors.log"; } 2>/dev/null
 if [ "$1" = "--max-timeout" ]; then
   echo 5
 elif [ "$1" = "agy" ] && [ "$2" = "PreToolUse" ]; then

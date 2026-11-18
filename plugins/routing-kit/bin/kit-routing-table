@@ -324,8 +324,11 @@ fi
 row "Second opinion" "$second" "via ask-advisers"
 
 # 6-7. Long reads and long outputs (Gemini)
+# Exploration goes to the research model only, never the long-read (Argon) model (owner, 17/11: "not argon").
+if [ -n "$g_research" ]; then
+  row "Exploration, big reads" "Gemini $g_research" "read-only facts with file:line, no decisions; another company checks code claims"
+fi
 if [ -n "$g_long" ]; then
-  row "Whole-repo reads, 300K+ tokens of context" "Gemini $g_long" "read-only; another company's model checks what it claims about the code"
   row "Very long single outputs" "Gemini $g_long" ""
 fi
 
@@ -455,8 +458,11 @@ fi
 row "Second opinion" "$second" "$so_note"
 
 # 5-6. Long reads and long outputs (Gemini)
+# Exploration goes to the research model only, never the long-read (Argon) model (owner, 17/11: "not argon").
+if [ -n "$g_research" ]; then
+  row "Exploration, big reads" "Gemini $g_research" "read-only facts with file:line, no decisions; another company checks code claims"
+fi
 if [ -n "$g_long" ]; then
-  row "Whole-repo reads, 300K+ tokens of context" "Gemini $g_long" "read-only; another company's model checks what it claims about the code"
   row "Very long single outputs" "Gemini $g_long" ""
 fi
 

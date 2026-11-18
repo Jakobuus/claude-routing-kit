@@ -26,6 +26,23 @@ try:
                     sys.exit()
     elif tool.get("kind") == "shell":
         # first line: the directory the command runs in; the rest: the command itself
+        roots = []
+        def add(p):
+            for v in (p, pathlib.Path(os.path.realpath(p))):
+                v = str(v).rstrip("/")
+                if v.startswith("/") and v not in roots and "\n" not in v:
+                    roots.append(v)
+        try:
+            home = pathlib.Path(os.environ.get("HOME") or pathlib.Path.home())
+            for d in (".ssh", ".aws", ".gnupg"):
+                add(home / d)
+            for p in profile.get("protected_paths", []):
+                if isinstance(p, str) and p:
+                    add(pathlib.Path(p).expanduser())
+        except (ValueError, OSError, TypeError, RuntimeError):
+            pass
+        print("\n".join(roots))
+        print("--KIT-ROOTS-END--")
         print(str(event.get("cwd") or os.getcwd()).replace("\n", " "))
         print(tool.get("command") or "")
 except (ValueError, OSError, TypeError):
@@ -33,6 +50,12 @@ except (ValueError, OSError, TypeError):
 ')
 case "$decision" in
   '{"action":'*) printf '%s\n' "$decision"; exit 0 ;;
+esac
+case "$decision" in
+  *$'\n--KIT-ROOTS-END--\n'*)
+    KIT_CRED_ROOTS=${decision%%$'\n--KIT-ROOTS-END--\n'*}
+    decision=${decision#*$'\n--KIT-ROOTS-END--\n'}
+    ;;
 esac
 case "$decision" in
   *$'\n'*) KIT_CWD=${decision%%$'\n'*}; cmd=${decision#*$'\n'} ;;
@@ -157,26 +180,7 @@ esac
 # Absolute credential roots, one per line: $HOME's ~/.ssh, ~/.aws, ~/.gnupg plus
 # every absolute profile protected_paths entry (raw and symlink-resolved). Never
 # hard-coded; read as literal data, never as a pattern.
-KIT_CRED_ROOTS=$(kit_python3 -c '
-import json, os, pathlib
-roots = []
-def add(p):
-    for v in (p, pathlib.Path(os.path.realpath(p))):
-        v = str(v).rstrip("/")
-        if v.startswith("/") and v not in roots and "\n" not in v:
-            roots.append(v)
-try:
-    home = pathlib.Path(os.environ.get("HOME") or pathlib.Path.home())
-    for d in (".ssh", ".aws", ".gnupg"):
-        add(home / d)
-    profile = json.loads((pathlib.Path(os.environ.get("ROUTING_KIT_HOME", pathlib.Path.home()/".config/routing-kit"))/"profile.json").read_text())
-    for p in profile.get("protected_paths", []):
-        if isinstance(p, str) and p:
-            add(pathlib.Path(p).expanduser())
-except (ValueError, OSError, TypeError, RuntimeError):
-    pass
-print("\n".join(roots))
-' 2>/dev/null)
+
 export KIT_CRED_ROOTS
 # Keep shell code while hiding data passed as quoted text or a heredoc body.
 cmd=$(printf '%s\n' "$cmd" | awk '

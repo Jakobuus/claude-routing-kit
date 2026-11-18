@@ -137,6 +137,26 @@ mk_selftest_brief() {
   echo "$d/brief.md"
 }
 
+# The builders delete a clean copy themselves. One they had to keep is this check's own, and only
+# that one is removed here: a run dir that did not exist before the build and is named for this
+# check, whose recorded retained-at path is a folder directly inside $KIT_HOME/retained. Nothing is
+# matched by name pattern in retained/.
+snap_runs() { ls "$KIT_HOME/runs" 2>/dev/null; }
+drop_selftest_copy() { # BEFORE_LIST (output of snap_runs from before the build)
+  local run kept root
+  root=$(kit_realpath "$KIT_HOME/retained" 2>/dev/null)
+  [ -n "$root" ] || return 0
+  for run in $(snap_runs); do
+    case "$run" in *-kit-selftest-*) ;; *) continue ;; esac
+    printf '%s\n' "$1" | grep -qxF -- "$run" && continue
+    kept=$(cat "$KIT_HOME/runs/$run/retained-at" 2>/dev/null)
+    [ -n "$kept" ] && [ -d "$kept" ] && [ ! -L "$kept" ] || continue
+    [ "$(dirname "$kept")" = "$root" ] && [ "$(basename "$kept")" = "$run" ] || continue
+    chmod -R u+rwx "$kept" 2>/dev/null
+    rm -rf "$kept" "$kept.why"
+  done
+}
+
 # --- profile --------------------------------------------------------------
 if "$BIN_DIR/kit-profile" validate >/dev/null 2>&1; then
   ok "profile"
@@ -175,8 +195,10 @@ if lane_enabled codex; then
     if [ -z "$tmp_repo" ] || [ -z "$tmp_brief" ]; then
       bad "codex" "could not create a temp repo/brief; free disk space and rerun kit-selftest" 2
     else
-      build_out=$("$BIN_DIR/kit-codex-build" --repo "$tmp_repo" --name kit-selftest-codex --brief "$tmp_brief" 2>&1)
+      runs_before=$(snap_runs)
+      build_out=$("$BIN_DIR/kit-codex-build" --no-paseo --repo "$tmp_repo" --name kit-selftest-codex --brief "$tmp_brief" 2>&1)
       build_code=$?
+      drop_selftest_copy "$runs_before"
       if [ "$build_code" -eq 0 ]; then
         ok "codex"
       else
@@ -200,8 +222,10 @@ if lane_enabled gemini; then
     if [ -z "$tmp_repo" ] || [ -z "$tmp_brief" ]; then
       bad "gemini" "could not create a temp repo/brief" 2
     else
+      runs_before=$(snap_runs)
       build_out=$("$BIN_DIR/kit-gemini-build" --repo "$tmp_repo" --name kit-selftest-gemini --brief "$tmp_brief" --timeout 120 2>&1)
       build_code=$?
+      drop_selftest_copy "$runs_before"
       if [ "$build_code" -eq 0 ]; then
         ok "gemini"
         case "$build_out" in *'WARNING: agy denied actions'*) warn 'Gemini denied actions; review the result and run checks yourself';; esac
@@ -242,9 +266,11 @@ for provider in kimi glm; do
     if [ -z "$tmp_repo" ] || [ -z "$tmp_brief" ]; then
       bad "$provider" "could not create a temp repo/brief; free disk space and rerun kit-selftest" 2
     else
+      runs_before=$(snap_runs)
       build_out=$("$BIN_DIR/locked-build" --provider "$provider" --repo "$tmp_repo" \
         --name "kit-selftest-$provider" --brief "$tmp_brief" --timeout 120 2>&1)
       build_code=$?
+      drop_selftest_copy "$runs_before"
       if [ "$build_code" -eq 0 ]; then
         ok "$provider"
       else

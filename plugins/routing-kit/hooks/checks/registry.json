@@ -37,11 +37,11 @@
   "PreToolUse": [
     {
       "check": "guard_destructive",
-      "timeout_s": 2
+      "timeout_s": 10
     },
     {
       "check": "guard_owner_checkout",
-      "timeout_s": 2
+      "timeout_s": 10
     },
     {
       "check": "delegation",

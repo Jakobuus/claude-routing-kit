@@ -28,6 +28,13 @@ HOME_DIR=$(mktmp)          # temp ROUTING_KIT_HOME with no profile
 printf '%s\n' '{"owner_name":"Sam"}' > "$HOME_DIR/profile.json"
 SID_BASE="finish-test-$$-$RANDOM"
 CASES=0
+# The exit trigger names a "prep-for-exit" skill the kit does not ship: it fires only when one is
+# installed. A temp HOME with that skill keeps the cases below independent of the real home.
+export HOME=$(mktmp)
+unset CODEX_HOME
+mkdir -p "$HOME/.claude/skills/prep-for-exit" && : > "$HOME/.claude/skills/prep-for-exit/SKILL.md"
+mkdir -p "$HOME/.gemini/skills/prep-for-exit" && : > "$HOME/.gemini/skills/prep-for-exit/SKILL.md"   # Antigravity
+mkdir -p "$HOME/.codex/skills/prep-for-exit" && : > "$HOME/.codex/skills/prep-for-exit/SKILL.md"     # Codex
 
 # ev AGENT EVENT PROMPT FIRST ACTIVE SESSION -> common event JSON
 ev() {
@@ -319,6 +326,23 @@ printf '%s\n' '{"owner_name":"Alex"}' > "$ownerhome/profile.json"
 run "$ownerhome" '' "$payload"
 assert_contains "$OUT" 'Alex asked' 'configured owner wording'
 
+# Without a prep-for-exit skill anywhere (Claude, ~/.agents, Codex), the trigger stays silent.
+for d in .claude .codex .gemini; do mv "$HOME/$d/skills/prep-for-exit" "$HOME/$d/skills/prep-for-exit.off"; done
+prompt_silent "prep for exit" "no prep-for-exit skill installed: silent"
+# Each agent looks in its own skill folders: ~/.agents serves Codex and Antigravity, not Claude.
+mkdir -p "$HOME/.agents/skills/prep-for-exit" && : > "$HOME/.agents/skills/prep-for-exit/SKILL.md"
+prompt_silent "prep for exit" "claude does not load ~/.agents skills: silent"
+run "$HOME_DIR" "" "$(ev codex UserPromptSubmit "prep for exit" true false "$SID_BASE")"
+expect_prep "codex with a ~/.agents skill: fires"
+# A Claude project skill (in the event's cwd) and a relocated Claude config folder both count.
+mkdir -p "$HOME/proj/.claude/skills/prep-for-exit" && : > "$HOME/proj/.claude/skills/prep-for-exit/SKILL.md"
+run "$HOME_DIR" "" "$(ev claude UserPromptSubmit "prep for exit" true false "$SID_BASE" | sed "s#\"/REPO\"#\"$HOME/proj\"#")"
+expect_prep "claude project skill in the event's cwd: fires"
+run "$HOME_DIR" "" "$(ev claude UserPromptSubmit "prep for exit" true false "$SID_BASE" | sed "s#\"/REPO\"#\"$HOME/proj/src/deep\"#")"
+expect_prep "claude project skill at the repo root above the cwd: fires"
+mkdir -p "$HOME/cfg/skills/prep-for-exit" && : > "$HOME/cfg/skills/prep-for-exit/SKILL.md"
+OUT=$(ev claude UserPromptSubmit "prep for exit" true false "$SID_BASE" | CLAUDE_CONFIG_DIR="$HOME/cfg" ROUTING_KIT_HOME="$HOME_DIR" kit_python3 "$CHECK" 2>/dev/null); CODE=$?
+expect_prep "claude skill under CLAUDE_CONFIG_DIR: fires"
 echo "cases: $CASES"
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

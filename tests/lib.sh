@@ -2,6 +2,10 @@
 # tests/lib.sh — tiny bash 3.2 test harness helpers.
 # Sourced by each tests/test_*.sh file.
 
+# Tests must not see the session they run in: a run from inside a Paseo agent, a Claude Code
+# session or a Codex thread would otherwise leak its identity into board presence and DMs.
+unset PASEO_AGENT_ID PASEO_AGENT_CWD CLAUDE_CODE_SESSION_ID CODEX_THREAD_ID CODEX_SESSION_ID ANTIGRAVITY_CONVERSATION_ID KIT_BOARD_NAME KIT_BOARD_SESSION KIT_BOARD_FAMILY KIT_ROLE
+
 PASS_COUNT=0
 FAIL_COUNT=0
 
@@ -81,7 +85,8 @@ _mktmp_cleanup() {
   wait 2>/dev/null
   [ -f "$_MKTMP_LIST" ] || return 0
   while IFS= read -r d; do
-    [ -n "$d" ] && rm -rf "$d"
+    # A retained build copy can hold read-only folders an agent stub left behind.
+    [ -n "$d" ] && { chmod -R u+rwx "$d" 2>/dev/null; rm -rf "$d"; }
   done < "$_MKTMP_LIST"
   rm -f "$_MKTMP_LIST"
 }

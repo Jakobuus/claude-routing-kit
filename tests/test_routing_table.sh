@@ -122,7 +122,7 @@ assert_contains "$t" "| Hardest builds: long overnight runs, or after a cheaper 
 assert_contains "$t" "Claude sonnet" "full: sonnet"
 assert_contains "$t" "medium or high, never above" "full: sonnet effort text"
 assert_contains "$t" "at high, never low" "full: luna effort text"
-assert_contains "$t" "| Whole-repo reads, 300K+ tokens of context | Gemini gemini-4-argon-high (trial) |" "full: whole-repo row"
+assert_contains "$t" "| Exploration, big reads | Gemini gemini-4-hydrogen-high | read-only facts with file:line, no decisions; another company checks code claims" "full: exploration row (Hydrogen, no Argon)"
 assert_contains "$t" "| Very long single outputs | Gemini gemini-4-argon-high (trial) |" "full: long outputs row"
 assert_contains "$t" "| Screenshots, UI checks, prose from supplied material | Codex gpt-6.1-terra (trial) |" "full: terra row"
 assert_contains "$t" "| Reading untrusted web pages or email while holding tools that can act | Claude opus | never Fable |" "full: untrusted row"
@@ -131,7 +131,7 @@ assert_contains "$t" "Gemini gemini-4-hydrogen-high" "full: research hydrogen hi
 case "$t" in *"Note:"*) fail "full: no Note without local lists";; *) pass;; esac
 # row order follows the field-guide table
 order=$(printf '%s\n' "$t" | sed -n '3,$p' | cut -d'|' -f2 | cut -c2-8 | tr '\n' ',')
-assert_eq "Plans, ,Hardest,Feature,Review ,Second ,Whole-r,Very lo,Screens,UI buil,Read-on,Bulk me,Web res,Reading,Mechani," "$order" "row order"
+assert_eq "Plans, ,Hardest,Feature,Review ,Second ,Explora,Very lo,Screens,UI buil,Read-on,Bulk me,Web res,Reading,Mechani," "$order" "row order"
 
 mkf pro none none false false false; t=$("$RT" --profile "$p/profile.json")
 assert_eq 9 "$(nrows "$t")" "claude-only pro: 9 rows"
@@ -192,12 +192,14 @@ assert_contains "$(row_of "$t" "Review")" "Gemini work → Codex gpt-6.1-sol" "c
 assert_contains "$t" "claude -p --model opus" "codex main: Claude helper is called as claude -p --model"
 case "$t" in *Hardest*) fail "codex main: no Hardest builds row (no Claude build script)";; *) pass;; esac
 assert_contains "$(row_of "$t" "Features")" "no Claude build script exists yet" "codex main: Features notes say there is no Claude build script"
-for rowname in "Whole-repo" "Very long" "Screenshots" "UI building" "Bulk mechanical" "Web research" "Reading untrusted"; do
+for rowname in "Exploration" "Very long" "Screenshots" "UI building" "Bulk mechanical" "Web research" "Reading untrusted"; do
   case "$(row_of "$t" "$rowname")" in *Claude*) fail "codex main: Claude must not appear in the $rowname row";; *) pass;; esac
 done
 assert_contains "$(row_of "$t" "Read-only lookups")" "Claude haiku" "codex main: Claude helper in lookups"
 assert_contains "$(row_of "$t" "Second opinion")" "Claude opus" "codex main: second opinion from Claude"
 assert_contains "$(row_of "$t" "Features")" "Codex gpt-6.1-sol" "codex main: Codex builds"
+assert_contains "$(row_of "$t" "Exploration")" "Gemini gemini-4-hydrogen-high" "codex main: exploration goes to Hydrogen"
+assert_contains "$(row_of "$t" "Exploration")" "no decisions" "codex main: exploration summary makes no decisions"
 assert_contains "$(row_of "$t" "Features")" "Gemini gemini-4-argon-high" "codex main: Gemini builds"
 assert_contains "$t" "kit-jules-build" "codex main: Jules row stays"
 
@@ -221,6 +223,12 @@ assert_eq 0 "$code" "gemini main: exit 0"
 assert_contains "$(row_of "$t" "Plans")" "Gemini gemini-4-argon-high" "gemini main: Plans row names Argon"
 assert_contains "$(row_of "$t" "Review")" "Gemini work → Claude opus" "gemini main: Gemini work goes to Claude when no Codex"
 case "$t" in *[Cc]odex*|*gpt-*|*terra*) fail "gemini main without Codex mentions Codex";; *) pass;; esac
+assert_contains "$(row_of "$t" "Exploration")" "Gemini gemini-4-hydrogen-high" "gemini main: exploration goes to Hydrogen"
+case "$(row_of "$t" "Exploration")" in *[Aa]rgon*) fail "gemini main: exploration never names Argon";; *) pass;; esac
+/usr/bin/jq '.gemini.research = .gemini.long_read' "$(dirname "$RT")/../rules/models.json" > "$p/models-same.json"
+t3=$("$RT" --profile "$p/profile.json" --models "$p/models-same.json")
+assert_contains "$(row_of "$t3" "Exploration")" "Gemini gemini-4-argon-high" "research == long read: exploration row uses that model"
+case "$(row_of "$t3" "Exploration")" in *"only when it is not enough"*) fail "research == long read: no fallback clause";; *) pass;; esac
 printf '{"version":1,"claude_plan":"pro","codex":"plus","gemini":"pro","jules":false,"kimi":false,"glm":false,"paseo":false,"main_agent":"gemini"}' > "$p/profile.json"
 t=$("$RT" --profile "$p/profile.json")
 assert_contains "$(row_of "$t" "Review")" "Gemini work → Codex gpt-6.1-sol" "gemini main with Codex: Gemini work goes to Codex"
@@ -279,6 +287,20 @@ assert_contains "$t" "Note: gemini-4-hydrogen-low is not offered by your gemini 
 printf 'gemini-4-argon-high\ngemini-4-hydrogen-medium\ngemini-4-hydrogen-high\ngemini-4-hydrogen-low\n' > "$gk/cache/agy-models.txt"
 t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json")
 case "$t" in *"Note:"*|*flash*) fail "complete gemini list: no Note, no flash";; *) pass;; esac
+# Exploration row under availability: research missing -> no exploration row (never Argon); long read missing -> research;
+# both missing -> no exploration row.
+printf 'gemini-4-argon-high\ngemini-4-hydrogen-medium\ngemini-4-hydrogen-low\n' > "$gk/cache/agy-models.txt"
+t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json")
+case "$t" in *"Exploration, big reads"*) fail "research unavailable: no exploration row (never Argon)";; *) pass;; esac
+assert_contains "$t" "Very long single outputs" "research unavailable: the long-output row stays"
+printf 'gemini-4-hydrogen-medium\ngemini-4-hydrogen-high\ngemini-4-hydrogen-low\n' > "$gk/cache/agy-models.txt"
+t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json")
+assert_contains "$(row_of "$t" "Exploration")" "Gemini gemini-4-hydrogen-high" "long read unavailable: exploration uses research"
+case "$(row_of "$t" "Exploration")" in *"only when it is not enough"*) fail "long read unavailable: no fallback clause";; *) pass;; esac
+case "$t" in *"Very long single outputs"*) fail "long read unavailable: no long-output row";; *) pass;; esac
+printf 'gemini-4-hydrogen-medium\ngemini-4-hydrogen-low\n' > "$gk/cache/agy-models.txt"
+t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json")
+case "$t" in *"Exploration, big reads"*) fail "both unavailable: no exploration row";; *) pass;; esac
 
 # --- the removed "Reviewer models" row is not referenced any more ---------
 if grep -rqi "reviewer models" "$REPO_ROOT/plugins/routing-kit/rules" "$REPO_ROOT/plugins/routing-kit/skills"; then

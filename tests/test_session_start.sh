@@ -591,10 +591,10 @@ all_profile "$d/profile.json" claude
 mkdir -p "$d/cache"; : > "$d/cache/agy-refresh.stamp"
 out=$(env KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-codex" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
 assert_contains "$out" '`kit-codex-build` takes `--model` only' "build rule: kit-codex-build takes --model only"
-assert_contains "$out" '`kit-gemini-build` takes `--model` only' "build rule: kit-gemini-build takes --model only"
+assert_contains "$out" '`kit-gemini-build` takes `--model` (and `--effort`)' "build rule: kit-gemini-build takes --model and --effort"
 assert_contains "$out" '`kit-jules-build` takes no model or effort' "build rule: kit-jules-build takes neither"
 case "$out" in *"build-command launch"*) fail "build rule still asks for model and effort on every build command";; *) pass;; esac
-for b in kit-codex-build kit-gemini-build kit-jules-build locked-build; do
+for b in kit-codex-build kit-jules-build locked-build; do
   if grep -q -e '--effort' "$PLUGIN_ROOT/bin/$b"; then fail "$b has an effort option; the rules say it has none"; else pass; fi
 done
 for b in kit-codex-build kit-gemini-build; do grep -q -e '--model)' "$PLUGIN_ROOT/bin/$b" && pass || fail "$b has no --model option"; done

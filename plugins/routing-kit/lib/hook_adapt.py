@@ -1,4 +1,5 @@
 """Normalize hook payloads and dispatch isolated checks."""
+from datetime import datetime, timezone
 import json
 import math
 import os
@@ -62,7 +63,7 @@ def log(error):
         home = Path(os.environ.get('ROUTING_KIT_HOME', str(Path.home() / '.config/routing-kit')))
         home.mkdir(parents=True, exist_ok=True)
         with (home / 'hook-errors.log').open('a') as f:
-            f.write(str(error).replace('\n', ' ') + '\n')
+            f.write(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ ') + str(error).replace('\n', ' ') + '\n')
     except OSError:
         pass
 
@@ -110,6 +111,8 @@ def dispatch(agent, event):
     decision = {'action': 'allow'}
     for entry in registry.get(common['event'], []):
         try:
+            if not isinstance(entry, dict) or not isinstance(entry.get('check'), str):
+                raise ValueError('invalid check entry: expected check and timeout_s keys')
             name = entry['check']
             if not re.fullmatch(r'[A-Za-z0-9_-]+', name):
                 raise ValueError('invalid check name')

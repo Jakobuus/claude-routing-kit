@@ -7,9 +7,12 @@
 # Usage: locked-build --provider kimi|glm --repo R --name N --brief FILE
 #                      [--model M] [--timeout SECS]
 #
-# The repo copy (wt) and the jail's home/cfg/tmp are deleted when the run
-# ends, on every exit path. The result is <run dir>/build.patch (apply it with
-# `git apply`); ROUTING_KIT_KEEP_RUNS=1 keeps the copy for debugging.
+# The jail's home/cfg/tmp are deleted when the run ends, on every exit path. So is the repo copy
+# (wt), when its work is saved: build.patch is saved and applies to the base commit (or the run is a
+# checked "no changes") and nothing in the copy is outside the patch. Otherwise the copy is moved to
+# $KIT_HOME/retained with the reason (kit-retained lists and deletes those). The result is
+# <run dir>/build.patch (apply it with `git apply`); ROUTING_KIT_KEEP_RUNS=1 keeps the copy for
+# debugging.
 # A copy holding a nested git repo, a FIFO or a hard-linked file is refused (exit 4).
 #
 # Exit codes: 0 ok · 2 bad input/dirty repo/unsafe path · 3 missing
@@ -121,7 +124,7 @@ wt="$run_dir/wt"
 run_claim "$run_dir"
 
 # From here on every exit -- a refusal, a failure, success -- goes through
-# cleanup: stop whatever is still running, then delete the repo copy. The
+# cleanup: stop whatever is still running, then delete the repo copy (or retain it). The
 # pids start empty because the trap can fire before any of them exists.
 scratch_pid=""
 gate_pid=""
@@ -169,8 +172,9 @@ cleanup() {
     { kill "$scratch_pid" 2>/dev/null; wait "$scratch_pid"; } 2>/dev/null
   fi
   # Last, once nothing of the jail or the gate can still be writing. Never
-  # changes the exit code: the shell exits with the status it had.
-  run_cleanup "$run_dir" || true
+  # changes the exit code: the shell exits with the status it had. A copy the jail
+  # never started in is deleted; one it worked in is deleted only when its work is saved.
+  run_cleanup_own "$run_dir" "locked-build ended" "$repo" || true
 }
 trap cleanup EXIT
 
@@ -185,7 +189,7 @@ fi
 key="$(kit_key "$provider")"
 key_code=$?
 if [ "$key_code" -ne 0 ]; then
-  # No rm here: the EXIT trap's run_cleanup deletes the repo copy (and
+  # No rm here: the EXIT trap's run_cleanup_own deletes the repo copy (and
   # honours ROUTING_KIT_KEEP_RUNS), the same as every other exit.
   exit "$key_code"
 fi
@@ -368,6 +372,7 @@ claude_stderr="$run_dir/claude-stderr.log"
 # keep writing to wt after the diff is already printed. With -m, this
 # backgrounded subshell gets its own process group (pgid == its pid), so
 # `kill -TERM -"$claude_pid"` (a negative pid) reaches the whole group.
+run_agent_started "$run_dir" || kit_die 4 'could not mark the run as started'
 set -m
 (
   cd "$wt" || exit 4
@@ -488,5 +493,5 @@ fi
 cost_usd=$(ledger_model_cost "$RULES_JSON" "$model" "$in_tokens" "$out_tokens")
 ledger_append "locked-build" "$model" "$name" "$in_tokens" "$out_tokens" "$claude_code" "$provider" "$cost_usd"
 
-# --- Step 12: stop the gate, delete the repo copy (the EXIT trap, cleanup) ---
+# --- Step 12: stop the gate, delete or retain the repo copy (the EXIT trap, cleanup) ---
 exit "$claude_code"

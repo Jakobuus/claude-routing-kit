@@ -25,11 +25,23 @@ def main():
         def load(agent, name):
             return json.loads((fixtures / agent / (name + '.json')).read_text())
 
-        def run(agent, payload, latte='0'):
+        # The exit-prep trigger fires only when a prep-for-exit skill is installed (the kit ships none):
+        # one home with the skill in every agent's folder, one without any.
+        skill_home, bare_home = scratch / 'home-skill', scratch / 'home-bare'
+        for sub in ('.claude', '.agents', '.gemini', '.codex'):
+            (skill_home / sub / 'skills' / 'prep-for-exit').mkdir(parents=True, exist_ok=True)
+            (skill_home / sub / 'skills' / 'prep-for-exit' / 'SKILL.md').write_text('---\nname: prep-for-exit\n---\n')
+        bare_home.mkdir(exist_ok=True)
+
+        def homed(home):
+            e = {k: v for k, v in env.items() if k not in ('CLAUDE_CONFIG_DIR',)}
+            return dict(e, HOME=str(home), CODEX_HOME=str(home / '.codex'))
+
+        def run(agent, payload, latte='0', run_env=None):
             event = payload.get('hookEventName', payload.get('hook_event_name'))
             result = subprocess.run([str(root / 'hooks/kit-hook'), agent, event],
                                     input=json.dumps(payload), text=True, capture_output=True,
-                                    env=dict(env, DOUBLE_SHOT_LATTE=latte), cwd=directory, timeout=10)
+                                    env=dict(run_env or env, DOUBLE_SHOT_LATTE=latte), cwd=directory, timeout=10)
             if result.returncode:
                 raise ValueError('hook failed')
             return json.loads(result.stdout) if result.stdout.strip() else {}
@@ -71,11 +83,12 @@ def main():
                 check(agent, name, probe)
             payload = load(agent, 'PreInvocation-n' if agy else 'UserPromptSubmit-n')
             payload['lastUserInput' if agy else 'prompt'] = 'prep for exit'
-            check(agent, 'prep_for_exit', lambda: 'SESSION-END TRIGGER' in json.dumps(run(agent, payload)))
+            check(agent, 'prep_for_exit', lambda: 'SESSION-END TRIGGER' in json.dumps(run(agent, payload, run_env=homed(skill_home))))
+            check(agent, 'prep_for_exit_needs_skill', lambda: 'SESSION-END TRIGGER' not in json.dumps(run(agent, payload, run_env=homed(bare_home))))
             if agy:
                 payload = load(agent, 'PreInvocation-later')
                 payload['lastUserInput'] = 'prep for exit'
-                check(agent, 'prep_for_exit_once_per_turn', lambda: 'SESSION-END TRIGGER' not in json.dumps(run(agent, payload)))
+                check(agent, 'prep_for_exit_once_per_turn', lambda: 'SESSION-END TRIGGER' not in json.dumps(run(agent, payload, run_env=homed(skill_home))))
             # Every handler sync_hooks generates must run here once: the kit-hook events not covered above, and the
             # standalone session-start command (exit 0, something on stdout).
             for event, fixture in (('SessionStart', 'SessionStart-n'), ('PostToolUse', 'PostToolUse-' + ('run_command' if agy else 'Bash'))):

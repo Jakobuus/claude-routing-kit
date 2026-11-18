@@ -38,7 +38,7 @@ old_sampled=$((now - 25200))  # 7h ago
 printf '{"five_hour":{"used_percentage":35,"resets_at":%s},"seven_day":{"used_percentage":10,"resets_at":%s},"sampled":%s}\n' \
   "$reset5" "$resetwk" "$old_sampled" > "$d2/claude-limits.json"
 out=$(env ROUTING_KIT_HOME="$d2" CODEX_HOME="$d2/no-codex" "$QUOTA")
-assert_contains "$out" "(7 h old)" "kit-quota marks a 7h-old sample as stale"
+assert_contains "$out" "(stale)" "kit-quota marks a 7h-old sample as stale"
 
 # ---- kit-quota: malformed claude-limits.json -> "-", exit 0 ---------
 d3=$(mktmp)
@@ -60,19 +60,19 @@ cat > "$sessdir/rollout-test.jsonl" <<EOF
 {"type":"other"}
 {"type":"turn","rate_limits":{"primary":{"used_percent":20,"resets_at":$c5reset,"window_minutes":300},"secondary":{"used_percent":54,"resets_at":$cwkreset,"window_minutes":10080}}}
 EOF
-out=$(env ROUTING_KIT_HOME="$d4" CODEX_HOME="$d4/codex-home" "$QUOTA")
+out=$(env ROUTING_KIT_HOME="$d4" QUOTA_CODEX_RESETS_CMD=/nonexistent CODEX_HOME="$d4/codex-home" "$QUOTA")
 assert_contains "$out" "Codex 5h 20%" "kit-quota shows Codex 5h percent from the newest session line"
 assert_contains "$out" "wk 54%" "kit-quota shows Codex weekly percent from the newest session line"
 
 # ---- kit-quota: Codex off in the profile -> absent from text and JSON
 d5=$(mktmp)
 mkprofile "$d5/profile.json" none false false false
-out=$(env ROUTING_KIT_HOME="$d5" CODEX_HOME="$d4/codex-home" "$QUOTA")
+out=$(env ROUTING_KIT_HOME="$d5" QUOTA_CODEX_RESETS_CMD=/nonexistent CODEX_HOME="$d4/codex-home" "$QUOTA")
 case "$out" in
   *Codex*) fail "kit-quota text mentions Codex even though the profile has it off" ;;
   *) pass ;;
 esac
-json=$(env ROUTING_KIT_HOME="$d5" CODEX_HOME="$d4/codex-home" "$QUOTA" --json)
+json=$(env ROUTING_KIT_HOME="$d5" QUOTA_CODEX_RESETS_CMD=/nonexistent CODEX_HOME="$d4/codex-home" "$QUOTA" --json)
 got=$(echo "$json" | /usr/bin/jq -r '.codex')
 assert_eq "null" "$got" "kit-quota --json reports codex:null when the lane is off"
 
@@ -174,7 +174,7 @@ printf '222         fix b          me/r       5m ago         In Progress\n'
 EOF
 chmod +x "$jbin/jules"
 out=$(env PATH="$jbin:/usr/bin:/bin" ROUTING_KIT_HOME="$dj" CODEX_HOME="$dj/no-codex" "$QUOTA")
-assert_contains "$out" "Jules 24h 13% (2/15, 1 running)" "kit-quota counts Jules sessions from the last 24 h"
+assert_contains "$out" "Jules 24h 2% (2/100, 1 running)" "kit-quota counts Jules sessions from the last 24 h"
 
 # ---- Jules: profile's jules_daily_limit changes the denominator -------
 dj2=$(mktmp)
@@ -387,9 +387,9 @@ else pass; fi
 # ---- kit-quota: claude_plan none leaves Claude out ------------------
 dn=$(mktmp)
 printf '{"version":1,"claude_plan":"none","main_agent":"codex","codex":"plus","jules":false,"kimi":false,"glm":false,"paseo":false}\n' > "$dn/profile.json"
-json=$(env ROUTING_KIT_HOME="$dn" CODEX_HOME="$dn/no-codex" "$QUOTA" --json)
+json=$(env ROUTING_KIT_HOME="$dn" QUOTA_CODEX_RESETS_CMD=/nonexistent CODEX_HOME="$dn/no-codex" "$QUOTA" --json)
 assert_eq null "$(printf '%s' "$json" | /usr/bin/jq -c '.claude')" "claude_plan none: --json claude is null"
-out=$(env ROUTING_KIT_HOME="$dn" CODEX_HOME="$dn/no-codex" "$QUOTA")
+out=$(env ROUTING_KIT_HOME="$dn" QUOTA_CODEX_RESETS_CMD=/nonexistent CODEX_HOME="$dn/no-codex" "$QUOTA")
 case "$out" in *Claude*) fail "claude_plan none: text has no Claude";; *) pass;; esac
 case "$out" in "│"*|" │"*) fail "claude_plan none: no leading separator";; *) pass;; esac
 

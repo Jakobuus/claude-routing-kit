@@ -134,6 +134,11 @@ else
 fi
 
 
+# --- kit_git's HOME cannot exist and is never created, so a killed caller leaves nothing. ---
+home_seen=$(bash -c '. "'"$KC"'"; kit_git var GIT_CONFIG_GLOBAL >/dev/null 2>&1; printf %s "$KIT_GIT_HOME"')
+case "$home_seen" in /var/empty/*) pass ;; *) fail "kit_git HOME is not under /var/empty: $home_seen" ;; esac
+[ ! -e "$home_seen" ] && pass || fail "kit_git HOME exists: $home_seen"
+
 # --- kit_require_supported: macOS and Linux (incl. WSL2, which reports
 # uname as Linux) pass; anything else (native Windows' MINGW/MSYS/CYGWIN
 # uname, or anything unrecognized) refuses with the supported-systems

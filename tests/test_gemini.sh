@@ -141,7 +141,7 @@ out=$(env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" KIT_AGY_CASE=denied "$BIN
 assert_contains "$out" 'WARNING: agy denied actions' 'denied actions warn loudly'
 assert_exit 4 'failure exits 4' -- env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" KIT_AGY_CASE=failure "$BIN" --repo "$repo" --name failure --brief "$brief"
 marker=$(mktmp)/child-marker
-out=$(env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" KIT_AGY_CASE=timeout KIT_AGY_MARKER="$marker" "$BIN" --repo "$repo" --name timeout --brief "$brief" --timeout 1 2>&1)
+out=$(env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" KIT_AGY_CASE=timeout KIT_AGY_TIMEOUT_GRACE=0 KIT_AGY_MARKER="$marker" "$BIN" --repo "$repo" --name timeout --brief "$brief" --timeout 1 2>&1)
 code=$?
 assert_eq 4 "$code" 'timeout exits 4'
 assert_contains "$out" 'timed out' 'timeout reported'
@@ -398,7 +398,7 @@ while time.monotonic() < end:
 OBS
     observer=$!
   fi
-  sout=$(env PATH="$sbindir:/usr/bin:/bin" ROUTING_KIT_HOME="$shome" KIT_AGY_BIN="$sbindir/agy" \
+  sout=$(env PATH="$sbindir:/usr/bin:/bin" ROUTING_KIT_HOME="$shome" KIT_AGY_TIMEOUT_GRACE=0 KIT_AGY_BIN="$sbindir/agy" \
     "$build_bin" --repo "$srepo" --name staging --brief "$sbrief" --timeout 2 2>&1)
   scode=$?
   spatch=$(find "$shome/runs" -name build.patch | head -1)
@@ -485,8 +485,8 @@ for awake in yes no; do
   fi
 done
 # Run directories vary; compare all other output bytes.
-sed "s|$home/runs/[^ /]*|RUN|g" "$caflog.yes" > "$caflog.normalized"
-sed "s|$home/runs/[^ /]*|RUN|g" "$caflog.no" > "$caflog.other"
+sed "s|$home/runs/[^ /]*|RUN|g; s|kit-gemini/[^ ]*|BRANCH|" "$caflog.yes" > "$caflog.normalized"
+sed "s|$home/runs/[^ /]*|RUN|g; s|kit-gemini/[^ ]*|BRANCH|" "$caflog.no" > "$caflog.other"
 assert_eq "$(cat "$caflog.normalized")" "$(cat "$caflog.other")" 'sleep guard preserves output'
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"

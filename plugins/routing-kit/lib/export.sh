@@ -6,6 +6,9 @@
 # kit_die, kit_realpath, KIT_HOME).
 
 EXPORT_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# Set to 1 by run_agent_started, in this process. It only ever goes from 0 to 1: sourcing this
+# file again does not reset it, and a 1 from outside can only make a cleanup keep more.
+[ "${_run_agent_started:-}" = 1 ] || _run_agent_started=0
 . "$EXPORT_LIB_DIR/../bin/kit-common"
 
 # _run_export_copy REPO WT — the clone-and-scrub half of run_export. Runs in a
@@ -60,15 +63,23 @@ _run_export_copy() {
     || kit_die 2 "could not save a pristine copy of the git directory"
   du -sk "$wt" 2>/dev/null | cut -f1 > "$run_dir/wt-size.kb"
   [ -s "$run_dir/wt-size.kb" ] || kit_die 2 "could not measure the copy"
+  # What the copy holds before any agent touches it: the base commit and every file and link in it
+  # (NUL separated, ./-relative, .git left out). run_cleanup_checked compares the end state with it.
+  kit_git -C "$wt" rev-parse HEAD > "$run_dir/export-base" 2>/dev/null \
+    || kit_die 2 "could not record the base commit"
+  ( cd "$wt" && find . -path ./.git -prune -o ! -type d -print0 ) > "$run_dir/export-files" 2>/dev/null \
+    || kit_die 2 "could not list the copy"
+  kit_git -C "$wt" for-each-ref --format='%(refname)' > "$run_dir/export-refs" 2>/dev/null \
+    || kit_die 2 "could not list the copy's refs"
 }
 
 # run_export REPO NAME — makes a self-contained working copy of REPO's
 # current HEAD under $KIT_HOME/runs/<date>-<slug>/wt and prints the
 # resolved run dir. Exit 2 if REPO is dirty, has no HEAD, or isn't a repo.
 #
-# The copy is scratch: callers run run_cleanup on exit, which deletes wt (and
-# the jail's home, cfg and tmp) and keeps the small files, build.patch
-# included. Before it makes a new copy, run_export also sweeps copies left
+# The copy is scratch: callers clean up on exit (run_cleanup_own): wt is deleted when its work is
+# saved (build.patch checked, nothing outside it) and moved to retained otherwise; the jail's home,
+# cfg and tmp go either way, and the small files, build.patch included, stay. Before it makes a new copy, run_export also sweeps copies left
 # behind by runs that never got to clean up (see run_sweep_stale).
 run_export() {
   local repo name date_str slug run_dir wt r
@@ -117,13 +128,44 @@ run_export() {
   ( _run_export_copy "$repo" "$wt" )
   r=$?
   if [ "$r" -ne 0 ]; then
-    run_cleanup "$run_dir" >/dev/null 2>&1
+    # No agent has been near this half-made copy: this process only just created it.
+    _run_cleanup_impl "$run_dir" "export failed" 1 >/dev/null 2>&1
     rmdir "$run_dir" 2>/dev/null
     exit "$r"
   fi
 
   run_dir="$(kit_realpath "$run_dir")"
   echo "$run_dir"
+}
+
+# run_agent_started RUN_DIR — call it right before an agent is started in RUN_DIR/wt, in the
+# builder's own shell (not a subshell), and do not start the agent if it fails. It is one-way:
+# it sets a flag in this process, which no agent can reach, and creates RUN_DIR/agent-started,
+# which the kit never removes. From then on nothing deletes that copy (see run_cleanup_own).
+run_agent_started() {
+  local run_dir="${1:-}"
+  [ -n "$run_dir" ] && [ -d "$run_dir" ] || return 1
+  _run_agent_started=1
+  : > "$run_dir/agent-started" 2>/dev/null || return 1
+  [ -f "$run_dir/agent-started" ] || return 1
+  return 0
+}
+
+# run_retain RUN_DIR [WHY] — move RUN_DIR/wt, whole, to $KIT_HOME/retained/<run dir name> and print
+# the new path. One rename on the same file system, under a lock on the retained folder, so the
+# copy is never half moved and never lands on another copy; nothing is copied or deleted. A small
+# file next to it, <name>.why, says when, from where and why. If the move cannot be made the copy
+# stays where it is and this returns 1 (lib/retained.py).
+# Retained copies are deleted only by hand: kit-retained prune --older-than DAYS.
+run_retain() {
+  local run_dir="${1:-}" why="${2:-}" real dest
+  real="$(kit_realpath "$run_dir")"
+  [ -n "$real" ] && [ -d "$real/wt" ] && [ ! -L "$real/wt" ] || return 1
+  dest="$(kit_python3 "$EXPORT_LIB_DIR/retained.py" retain "$KIT_HOME" "$real" "${why:-run ended}" 2>/dev/null)" || return 1
+  [ -n "$dest" ] || return 1
+  printf '%s\n' "$dest" > "$real/retained-at" 2>/dev/null
+  printf '%s\n' "$dest"
+  return 0
 }
 
 # _run_has_attr_source GIT-OPTIONS... — returns 0 if this git knows the global
@@ -277,9 +319,11 @@ run_build_patch() {
 
 # Gemini creates its staging repository only after agy and its process group
 # have exited. Nothing from the agent's .git or the old git.pristine is used.
+# run_build_patch_fresh WT SOURCE BASE [OUT] — OUT defaults to <run dir>/build.patch; run_cleanup_checked
+# passes its own file to stage the copy a second time and compare.
 run_build_patch_fresh() {
   local worktree="$1" source="$2" base="$3" patch
-  patch="$(dirname "$worktree")/build.patch"
+  patch="${4:-$(dirname "$worktree")/build.patch}"
   rm -f "$patch"
   if (
     local scratch attr old_git drivers key
@@ -303,6 +347,11 @@ run_build_patch_fresh() {
     }
     staging_git clone --template= --depth 1 --single-branch --no-local --no-checkout --no-hardlinks \
       "file://$source" "$scratch/git" >/dev/null 2>&1 || exit 4
+    # The clone holds only the branch tip. If the source moved on since BASE (a commit during the
+    # build), fetch BASE itself by id.
+    staging_git -C "$scratch/git" cat-file -e "$base^{commit}" 2>/dev/null \
+      || staging_git -C "$scratch/git" fetch --quiet --depth 1 --no-tags "file://$source" "$base" >/dev/null 2>&1 \
+      || exit 4
     staging_git -C "$scratch/git" cat-file -e "$base^{commit}" || exit 4
     while IFS= read -r key; do
       [ -n "$key" ] && drivers=(${drivers[@]+"${drivers[@]}"} -c "$key=")
@@ -395,6 +444,10 @@ SNAPSHOT
     staging_git ${attr[@]+"${attr[@]}"} --git-dir="$scratch/git/.git" \
       --work-tree="$worktree" diff --cached --binary --no-ext-diff \
       --no-textconv --ignore-submodules=all "$base" > "$patch" 2>/dev/null || exit 4
+    if [ -s "$patch" ]; then
+      staging_git -C "$scratch/git" read-tree "$base" || exit 4
+      staging_git -C "$scratch/git" apply --cached --check "$patch" || exit 4
+    fi
   ); then
     return 0
   fi
@@ -412,15 +465,208 @@ run_stage_and_diff() {
   cat "$(dirname "$worktree")/build.patch"
 }
 
-# run_cleanup RUN_DIR — deletes the bulky per-run dirs (wt, home, cfg, tmp and
+# run_cleanup RUN_DIR [WHY] — clears the bulky per-run dirs (wt, home, cfg, tmp and
 # the pristine git.pristine) and keeps the small files: logs, brief.md,
 # build.patch, the provider's output. Never fails (callers run it from exit
-# traps, which must keep the script's own exit code) and never deletes
+# traps, which must keep the script's own exit code) and never touches
 # anything but those five dirs
 # inside a direct child of $KIT_HOME/runs. ROUTING_KIT_KEEP_RUNS=1 keeps the
 # copy for debugging.
+# wt is never deleted here: it is moved to $KIT_HOME/retained with WHY
+# (run_retain), and a copy that cannot be moved stays where it is. No file in
+# the run dir can change that, because an agent could have written it. This
+# is what every recovery cleanup uses that cannot know what happened in the
+# copy (the stale sweep). A builder that knows the repo and the base commit uses
+# run_cleanup_own or run_cleanup_checked, which delete a copy whose work is saved.
 run_cleanup() {
-  local run_dir real runs_root d p
+  _run_cleanup_impl "${1:-}" "${2:-}" 0
+}
+
+# _run_patch_verified RUN_DIR REPO BASE — 0 when RUN_DIR/build.patch is a plain file and either
+# empty (the verified "no changes" result) or applies to BASE of REPO (git apply --check, in a
+# throwaway clone). Anything else prints the reason and returns 1.
+_run_patch_verified() {
+  local run_dir="$1" repo="$2" base="$3" patch scratch rc=1
+  patch="$run_dir/build.patch"
+  if [ ! -f "$patch" ] || [ -L "$patch" ]; then echo "no build.patch saved"; return 1; fi
+  [ -s "$patch" ] || return 0
+  if [ -z "$repo" ] || [ -z "$base" ]; then echo "build.patch cannot be checked (no repo or base commit)"; return 1; fi
+  scratch="$(mktemp -d "$KIT_HOME/verify-XXXXXX" 2>/dev/null)" || { echo "build.patch could not be checked"; return 1; }
+  if kit_git clone --no-local --no-checkout --quiet "$repo" "$scratch" >/dev/null 2>&1 \
+    && kit_git -C "$scratch" read-tree "$base" >/dev/null 2>&1 \
+    && kit_git -C "$scratch" apply --cached --check "$patch" >/dev/null 2>&1; then
+    rc=0
+  else
+    echo "build.patch does not apply to the base commit"
+  fi
+  rm -rf "$scratch"
+  return "$rc"
+}
+
+# Source of the check in _run_outside_patch (a variable: bash 3.2 cannot parse a heredoc inside $( )).
+IFS= read -r -d '' _RUN_OUTSIDE_PY <<'OUTSIDE' || true
+import os, sys
+run_dir, names_file = sys.argv[1:]
+def paths(blob):
+    return set(os.fsdecode(p) for p in blob.split(b'\0') if p)
+exported = set(p[2:] if p.startswith('./') else p for p in paths(open(os.path.join(run_dir, 'export-files'), 'rb').read()))
+fields = open(names_file, 'rb').read().split(b'\0')
+named, i = set(), 0
+while i < len(fields):
+    parts = fields[i].split(b'\t', 2)
+    if len(parts) == 3 and parts[2] == b'':
+        named.update(os.fsdecode(f) for f in fields[i + 1:i + 3]); i += 3
+    else:
+        if len(parts) == 3:
+            named.add(os.fsdecode(parts[2]))
+        i += 1
+wt = os.path.join(run_dir, 'wt')
+found = []
+def unreadable(error):
+    found.append('%s (could not be read)' % getattr(error, 'filename', None))
+for top, dirs, files in os.walk(wt, onerror=unreadable):
+    if top == wt and '.git' in dirs:
+        dirs.remove('.git')
+    for name in files + [d for d in dirs if os.path.islink(os.path.join(top, d))]:
+        rel = os.path.relpath(os.path.join(top, name), wt)
+        if rel not in exported and rel not in named:
+            found.append(rel + ' (ignored by git, not in build.patch)')
+print('\n'.join(sorted(found)[:3]))
+sys.exit(1 if found else 0)
+OUTSIDE
+
+# _run_outside_patch RUN_DIR — prints (at most three of) the files in RUN_DIR/wt that the patch cannot
+# hold, and returns 1 if there are any: a file that is neither in the copy as exported nor named by
+# build.patch (an ignored file, say), or any path the walk could not read. 2 when it cannot tell.
+# (Contents are compared separately, by staging the copy again; see _run_keep_reason.)
+_run_outside_patch() {
+  local run_dir="$1" names out rc
+  [ -f "$run_dir/export-files" ] && [ -f "$run_dir/build.patch" ] || { echo "no record of the exported copy"; return 2; }
+  names="$(mktemp "$KIT_HOME/patch-names-XXXXXX" 2>/dev/null)" || { echo "could not read build.patch"; return 2; }
+  if [ -s "$run_dir/build.patch" ]; then
+    (cd / && kit_git apply --numstat -z "$run_dir/build.patch") > "$names" 2>/dev/null
+  else
+    : > "$names"
+  fi
+  if [ "$?" -ne 0 ]; then
+    rm -f "$names"; echo "could not read build.patch"; return 2
+  fi
+  out="$(kit_python3 -c "$_RUN_OUTSIDE_PY" "$run_dir" "$names")"
+  rc=$?
+  rm -f "$names"
+  [ -z "$out" ] || printf '%s\n' "$out"
+  return "$rc"
+}
+
+# _run_keep_reason RUN_DIR REPO BASE OPEN_WHY — prints why the copy in RUN_DIR must be kept, or
+# nothing when it may be deleted: all of
+#  (a) build.patch is saved and applies to BASE (or is the checked "no changes");
+#  (b) staging the copy again, exactly as build.patch was made, gives a byte-identical patch (so
+#      every content, mode, symlink and deletion change is in it), no path of the copy is
+#      unreadable, and no file git ignores was added since export;
+#  (b2) the copy's own .git has no ref the export did not create (a stash, another branch);
+#  (c) no agent is still open in it: OPEN_WHY is the caller's answer, empty when none is.
+# The export lists (export-files, export-refs) sit in the run dir, which an unconfined agent could
+# have rewritten: a known limit, as with agent-started.
+_run_keep_reason() {
+  local run_dir="$1" repo="$2" base="$3" open_why="${4:-}" why files tmp refs
+  [ -z "$open_why" ] || { printf '%s\n' "an agent may still be open in it: $open_why"; return 0; }
+  [ -n "$base" ] || base="$(cat "$run_dir/export-base" 2>/dev/null)"
+  if ! why="$(_run_patch_verified "$run_dir" "$repo" "$base")"; then
+    printf '%s\n' "$why"; return 0
+  fi
+  tmp="$(mktemp "$KIT_HOME/restage-XXXXXX" 2>/dev/null)" || { echo "could not stage the copy again"; return 0; }
+  # In a shell of its own: this runs from exit traps, where a subshell's own EXIT trap (which removes
+  # the staging scratch) does not fire.
+  if ! bash -c '. "$1"; run_build_patch_fresh "$2" "$3" "$4" "$5"' _ "$EXPORT_LIB_DIR/export.sh" "$run_dir/wt" "$repo" "$base" "$tmp" >/dev/null 2>&1 \
+    || ! cmp -s "$tmp" "$run_dir/build.patch"; then
+    rm -f "$tmp"
+    echo "the copy no longer matches build.patch (staging it again gives a different patch, or fails)"
+    return 0
+  fi
+  rm -f "$tmp"
+  if ! files="$(_run_outside_patch "$run_dir")"; then
+    printf 'files the patch does not hold: %s\n' "$(printf '%s' "$files" | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
+    return 0
+  fi
+  if ! refs="$(kit_git --git-dir="$run_dir/wt/.git" for-each-ref --format='%(refname)' 2>/dev/null)"; then
+    echo "the copy's .git cannot be read"
+    return 0
+  fi
+  refs="$(printf '%s\n' "$refs" | grep -vxF -f "$run_dir/export-refs" | grep -v '^$' | head -n 3 | tr '\n' ' ')"
+  [ -z "$refs" ] || printf 'the copy'"'"'s .git holds work the patch does not: %s\n' "$refs"
+  return 0
+}
+
+# run_copy_busy RUN_DIR — prints why the copy cannot be shown to be idle, and returns 0, when any
+# process has its working directory or an open file inside RUN_DIR/wt (one lsof call), or when lsof
+# cannot be run. Prints nothing and returns 1 when none does. A direct builder only killed the
+# process group of the agent it started; a child that left it may still be writing.
+run_copy_busy() {
+  local wt out rc lsof_bin
+  wt="$(kit_realpath "${1:-}/wt")"
+  [ -n "$wt" ] && [ -d "$wt" ] || return 1
+  # /usr/sbin is not on every minimal PATH (macOS keeps lsof there).
+  lsof_bin="$(command -v lsof 2>/dev/null)"
+  [ -n "$lsof_bin" ] || { [ -x /usr/sbin/lsof ] && lsof_bin=/usr/sbin/lsof; }
+  [ -n "$lsof_bin" ] || { echo "lsof is not available to show that no process is still in it"; return 0; }
+  out="$("$lsof_bin" -w +D "$wt" 2>/dev/null)"
+  rc=$?
+  if [ -n "$out" ]; then
+    echo "a process still has its working directory or an open file in it: $(printf '%s\n' "$out" | sed -n '2p' | awk '{print $1" pid "$2}')"
+    return 0
+  fi
+  [ "$rc" -le 1 ] || { echo "lsof failed, so it cannot be shown that no process is still in it"; return 0; }
+  return 1
+}
+
+# run_cleanup_checked RUN_DIR WHY REPO [BASE [OPEN_WHY]] — the cleanup for a run an agent worked in,
+# whose builder knows the repo (and the base commit; default: the one recorded at export). The
+# copy is DELETED when _run_keep_reason finds nothing to keep it for; otherwise it is MOVED to
+# $KIT_HOME/retained as run_cleanup does, with "WHY; kept: <reason>" in its note. Sets
+# RUN_CLEANUP_RESULT to deleted or kept (kept also when the copy could not be moved: it then
+# stays in the run dir). Never fails.
+run_cleanup_checked() {
+  local run_dir="${1:-}" why="${2:-}" repo="${3:-}" base="${4:-}" open_why="${5:-}" reason=""
+  RUN_CLEANUP_RESULT=kept
+  if [ -n "$run_dir" ] && [ -d "$run_dir" ] && [ ! -L "$run_dir" ]; then
+    reason="$(_run_keep_reason "$run_dir" "$repo" "$base" "$open_why")" || reason="could not check the copy"
+  else
+    reason="no run dir"
+  fi
+  if [ -z "$reason" ]; then
+    _run_cleanup_impl "$run_dir" "$why" 1
+    [ -e "$run_dir/wt" ] || [ -L "$run_dir/wt" ] || RUN_CLEANUP_RESULT=deleted
+  else
+    _run_cleanup_impl "$run_dir" "${why:+$why; }kept: $reason" 0
+  fi
+  return 0
+}
+
+# run_cleanup_own RUN_DIR WHY [REPO [BASE [OPEN_WHY]]] — for the builder that made RUN_DIR in this
+# very process. A copy no agent was started in (this process has not called run_agent_started, and
+# RUN_DIR/agent-started does not exist) is deleted: it is nothing but HEAD. Otherwise
+# run_cleanup_checked with the given REPO, or plain run_cleanup (move it) without one.
+run_cleanup_own() {
+  local run_dir="${1:-}"
+  if [ "${_run_agent_started:-0}" != 1 ] && [ -n "$run_dir" ] \
+    && [ ! -e "$run_dir/agent-started" ] && [ ! -L "$run_dir/agent-started" ]; then
+    _run_cleanup_impl "$run_dir" "${2:-}" 1
+    RUN_CLEANUP_RESULT=deleted
+  elif [ -n "${3:-}" ]; then
+    run_cleanup_checked "$run_dir" "${2:-}" "$3" "${4:-}" "${5:-}"
+  else
+    _run_cleanup_impl "$run_dir" "${2:-}" 0
+    RUN_CLEANUP_RESULT=kept
+  fi
+  return 0
+}
+
+# _run_cleanup_impl RUN_DIR WHY DELETE_WT — DELETE_WT is 1 only from run_cleanup_own (no agent was
+# started), run_cleanup_checked (after its checks passed) and run_export's own failed copy.
+_run_cleanup_impl() {
+  local run_dir real runs_root d p delete_wt
+  delete_wt="${3:-0}"
   run_dir="${1:-}"
   if [ -z "$run_dir" ]; then
     echo "run_cleanup: no run dir given; nothing deleted" >&2
@@ -443,6 +689,12 @@ run_cleanup() {
     p="$real/$d"
     if [ -L "$p" ]; then
       rm -f "$p"
+    elif [ "$d" = wt ] && [ -e "$p" ] && [ "$delete_wt" != 1 ]; then
+      # An agent may have worked in this copy, and no patch is proof that every file of that work
+      # is saved elsewhere (ignored files, the copy's own .git). It is moved aside, never deleted.
+      if ! run_retain "$real" "${2:-run ended}" >/dev/null; then
+        echo "run_cleanup: could not move $p to $KIT_HOME/retained; it stays where it is" >&2
+      fi
     elif [ -e "$p" ]; then
       # A jailed build can leave read-only dirs that rm -rf alone can't
       # enter. chmod -R doesn't follow symlinks it meets inside the tree
@@ -473,6 +725,10 @@ run_sweep_stale() {
         rm -rf "$d"
       done
   fi
+  # The Paseo transport's head-XXXXXX copy of the source lives only while the export is made; one
+  # older than a day is the leftover of a run that was killed hard.
+  find "$KIT_HOME" -mindepth 1 -maxdepth 1 -type d -name 'head-??????' -mmin +1440 2>/dev/null |
+    while IFS= read -r d; do rm -rf "$d"; done
   [ -d "$KIT_HOME/runs" ] || return 0
   find "$KIT_HOME/runs" -mindepth 1 -maxdepth 1 -type d -mmin +1440 2>/dev/null \
     | while IFS= read -r d; do
@@ -481,6 +737,8 @@ run_sweep_stale() {
           ''|*[!0-9]*) ;;
           *) kill -0 "$pid" 2>/dev/null && continue ;;
         esac
+        # A Paseo run waiting to be finished, or one kept on purpose, keeps its copy at any age.
+        kit_jq -e '.cleanup == "pending" or .cleanup == "kept"' "$d/manifest.json" >/dev/null 2>&1 && continue
         run_cleanup "$d" >/dev/null 2>&1
       done
   return 0

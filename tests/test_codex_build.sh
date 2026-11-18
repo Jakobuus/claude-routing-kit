@@ -1284,5 +1284,109 @@ sed "s|$home/runs/[^ /]*|RUN|g" "$caflog.yes" > "$caflog.normalized"
 sed "s|$home/runs/[^ /]*|RUN|g" "$caflog.no" > "$caflog.other"
 assert_eq "$(cat "$caflog.normalized")" "$(cat "$caflog.other")" 'sleep guard preserves output'
 
+# --- No copy an agent worked in is deleted (direct mode). Codex leaves `hello.txt` plus a nested
+# repository, staging refuses, and there is no patch: the copy is the only place the work exists.
+# It is moved to <kit home>/retained, whole, and the path is printed.
+src=$(mk_src_repo)
+d=$(mktmp); echo 'do it' > "$d/brief.md"
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin_breaks_git)
+out=$(env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name refusedrun --brief "$d/brief.md" 2>&1)
+code=$?
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+kept="$home/retained/$(basename "$run_dir")"
+assert_eq 4 "$code" "staging refusal still exits 4"
+if [ ! -e "$run_dir/build.patch" ] && [ ! -e "$run_dir/wt" ] && [ "$(cat "$kept/hello.txt" 2>/dev/null)" = hi ] && [ -d "$kept/sub/.git" ]; then
+  pass
+else
+  fail "a refused direct build must keep its copy in retained (no patch holds the work)"
+fi
+assert_contains "$out" "kit-codex-build: repo copy retained: $kept" "the refusal prints where the copy is"
+if grep -q "^from=$run_dir/wt$" "$kept.why" 2>/dev/null && grep -q '^why=kit-codex-build ended (exit 4); kept: no build.patch saved$' "$kept.why"; then
+  pass
+else
+  fail "the retained copy has a note saying where it came from and why"
+fi
+# A successful direct build whose work is all in build.patch has its copy deleted; its output is unchanged.
+home=$(mktmp)
+fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
+out=$(env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name keptrun --brief "$d/brief.md" 2>&1)
+code=$?
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+assert_eq 0 "$code" "direct build succeeds"
+if [ ! -e "$run_dir/wt" ] && [ ! -e "$home/retained" ] && [ -s "$run_dir/build.patch" ]; then
+  pass
+else
+  fail "a finished direct build deletes its copy once build.patch is saved and checked"
+fi
+assert_contains "$(printf '%s\n' "$out" | tail -1)" "exit=0 patch=$run_dir/build.patch" "last line of a direct build is unchanged"
+# A run refused before Codex is started leaves nothing behind: that copy is only HEAD.
+home=$(mktmp)
+k="sk-""ant-api03-$(printf 'A%.0s' {1..24})"
+printf 'notes\n\nkey: %s\n' "$k" > "$d/secret-brief.md"
+env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name notstarted --brief "$d/secret-brief.md" >/dev/null 2>&1
+assert_eq 5 "$?" "secret refusal before the agent starts"
+if [ -z "$(find "$home/runs" -mindepth 2 -maxdepth 2 -name wt 2>/dev/null)" ] && [ -z "$(ls -A "$home/retained" 2>/dev/null)" ]; then
+  pass
+else
+  fail "a copy no agent was started in is deleted, not retained"
+fi
+
+# Review finding 1 (direct): Codex writes work, makes staging refuse, and forges the run dir's
+# marks ("not started" recreated, "started" removed). There is no patch; the copy must survive.
+forgebin=$(mktmp)
+cat > "$forgebin/codex" <<'EOF'
+#!/bin/bash
+cat >/dev/null
+dir=""; prev=""
+for a in "$@"; do [ "$prev" = "-C" ] && dir="$a"; prev="$a"; done
+echo unique-work > "$dir/hello.txt"
+mkdir -p "$dir/sub/.git"
+: > "$dir/../agent-not-started"
+rm -f "$dir/../agent-started"
+exit 0
+EOF
+chmod +x "$forgebin/codex"
+home=$(mktmp)
+env PATH="$forgebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+  "$BIN" --repo "$src" --name forgedrun --brief "$d/brief.md" >/dev/null 2>&1
+assert_eq 4 "$?" "forged marks: staging refusal still exits 4"
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+assert_eq unique-work "$(cat "$home/retained/$(basename "$run_dir")/hello.txt" 2>/dev/null)" "forged marks do not get a direct build's copy deleted"
+
+# Direct mode prints the final exit/patch/result line on every exit once a run exists, failures too.
+src2=$(mk_src_repo)
+home=$(mktmp)
+failbin=$(mktmp)
+printf '#!/bin/bash\ncat >/dev/null\nexit 1\n' > "$failbin/codex"; chmod +x "$failbin/codex"
+out=$(env PATH="$failbin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" "$BIN" --repo "$src2" --name lastline --brief "$d/brief.md" 2>&1)
+code=$?
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+assert_eq 4 "$code" "a failing direct build exits 4"
+assert_eq "kit-codex-build: exit=4 patch= result=$run_dir/codex-output.txt" "$(printf '%s\n' "$out" | tail -1)" "a failed direct build still ends with the exit/patch/result line"
+src=$(mk_src_repo)
+# A commit in the source repo while the agent works (direct mode): BASE is fetched by id, the patch is made.
+d=$(mktmp); echo 'do it' > "$d/brief.md"
+movebin=$(mktmp)
+cat > "$movebin/codex" <<EOF
+#!/bin/bash
+cat >/dev/null
+dir=""; prev=""
+for a in "\$@"; do [ "\$prev" = "-C" ] && dir="\$a"; prev="\$a"; done
+echo hi > "\$dir/hello.txt"
+git -C "$src" commit -q --allow-empty -m 'user commit during the build'
+exit 0
+EOF
+chmod +x "$movebin/codex"
+home=$(mktmp)
+out=$(env PATH="$movebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" "$BIN" --repo "$src" --name movingrun --brief "$d/brief.md" 2>&1)
+code=$?
+run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
+assert_eq 0 "$code" "a commit in the source repo during a direct build does not break staging"
+assert_contains "$(cat "$run_dir/build.patch" 2>/dev/null)" "+++ b/hello.txt" "the patch is made after the source moved on"
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

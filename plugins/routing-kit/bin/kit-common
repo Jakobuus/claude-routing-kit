@@ -292,19 +292,17 @@ kit_key() {
 # (created once, reused, never removed), which meant every process that
 # ever called kit_git (every test run, every locked-build run) left one
 # more kit-git-home.* directory under $TMPDIR behind forever.
+# HOME is now a path that cannot exist and that the user cannot create (/var/empty is root-owned
+# on macOS; /var is not user-writable on Linux): git finds no ~/.gitconfig, nothing is created,
+# so nothing can be left behind when a caller is killed mid-call (a per-call mktemp HOME leaked then).
+KIT_GIT_HOME=/var/empty/kit-git-home-none
 kit_git() {
-  local git_home git_code
-  git_home="$(mktemp -d "${TMPDIR:-/tmp}/kit-git-home.XXXXXX")" \
-    || kit_die 2 "could not create a throwaway HOME for git"
   env -i \
     PATH=/usr/bin:/bin \
-    HOME="$git_home" \
+    HOME="$KIT_GIT_HOME" \
     GIT_CONFIG_NOSYSTEM=1 \
     GIT_CONFIG_GLOBAL=/dev/null \
     git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"
-  git_code=$?
-  rm -rf "$git_home"
-  return "$git_code"
 }
 
 # kit_shell_quote WORD — WORD as one shell word. Plain words stay as they are;

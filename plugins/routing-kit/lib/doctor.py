@@ -86,12 +86,53 @@ def main():
         kit.mkdir(parents=True,exist_ok=True)
         (kit/'doctor-state.json').write_text(json.dumps({'hook_errors':count})+'\n')
     if not a.fast:
+        from sync_hooks import max_timeout
+        hook_root = Path(__file__).resolve().parent.parent
+        targets = {homes['claude']/'settings.json', homes['codex']/'hooks.json',
+                   homes['gemini']/'config/hooks.json'}
+        targets.update(Path(name) for name in sync.get('hooks', {}))
+        required = {}
+        for target in sorted(targets):
+            hooks = load(target).get('hooks', {})
+            if not isinstance(hooks, dict):
+                continue
+            for event, groups in hooks.items():
+                if not isinstance(groups, list):
+                    continue
+                for group in groups:
+                    if not isinstance(group, dict):
+                        continue
+                    handlers = group.get('hooks', [group])
+                    if not isinstance(handlers, list):
+                        continue
+                    for handler in handlers:
+                        if not isinstance(handler, dict) or 'kit-hook' not in str(handler.get('command', '')):
+                            continue
+                        if event not in required:
+                            required[event] = max_timeout(hook_root, event)
+                        timeout = handler.get('timeout', 0)
+                        if not isinstance(timeout, (int, float)) or timeout < required[event]:
+                            add('hook_timeout', 'hook timeout too low: %s %s (needs %s s); run kit-sync hooks' %
+                                (target, event, required[event]))
         import datetime  # only the full run reads the media log, so the fast run stays quick
         week_ago = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
         routes = kit/'route-log.jsonl'
         seen = [e for e in map(parse_line, routes.read_text().splitlines() if routes.exists() else []) if str(e.get('time', '')) >= week_ago]
         if seen:
             add('media_jobs', 'media jobs: %d seen, %d routed' % (len(seen), sum(e.get('routed') is not False for e in seen)))
+        # Build copies the kit moved aside instead of deleting. Walking them takes time: full run only.
+        retained = kit/'retained'
+        copies = [d for d in (sorted(retained.iterdir()) if retained.is_dir() and not retained.is_symlink() else []) if d.is_dir() and not d.is_symlink() and not d.name.startswith('.')]
+        if copies:
+            total = 0
+            for copy in copies:
+                for folder, _, names in os.walk(copy):
+                    for name in names:
+                        try:
+                            total += os.lstat(os.path.join(folder, name)).st_size
+                        except OSError:
+                            pass
+            add('retained', 'retained build copies: %d, %.1f MB (kit-retained list; kit-retained prune --older-than DAYS)' % (len(copies), total/1e6))
     if a.cost and not a.fast:
         commands = [('claude',['claude','-p','--output-format','json','--model','claude-haiku-5-5','reply ok']),('codex',['codex','exec','--json','--skip-git-repo-check','-m','gpt-6-luna','reply ok']),('gemini',['agy','--output-format','json','--model','gemini-4-hydrogen-low','-p','reply ok'])]
         for agent, command in commands:

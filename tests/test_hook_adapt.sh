@@ -7,7 +7,7 @@ export PYTHONDONTWRITEBYTECODE=1
 python3 - "$ROOT" <<'PYTEST'
 import copy, json, pathlib, subprocess, sys
 root = pathlib.Path(sys.argv[1])
-fixtures = root / 'tests/fixtures/hooks'
+fixtures = root / 'plugins/routing-kit/hooks/fixtures'
 passed = failed = 0
 
 def check(label, agent, payload, expected, event=None):

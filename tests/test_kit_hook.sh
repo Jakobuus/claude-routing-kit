@@ -17,7 +17,7 @@ def setup(entries):
 def run(agent='claude', event='PreToolUse', payload=None, env=None):
     if payload is None:
         name = 'run_command' if agent == 'agy' else 'Bash'
-        payload = (root / f'tests/fixtures/hooks/{agent}/PreToolUse-{name}.json').read_text()
+        payload = (root / f'plugins/routing-kit/hooks/fixtures/{agent}/PreToolUse-{name}.json').read_text()
     result = subprocess.run([str(hook), agent, event], input=payload, text=True, capture_output=True, env=env)
     assert result.returncode == 0, result
     return json.loads(result.stdout) if result.stdout else None
@@ -39,11 +39,11 @@ setup({'PreToolUse':[{'check':n} for n in ('one','deny','last')]})
 assert run()['hookSpecificOutput']['permissionDecisionReason'] == 'blocked'
 assert 'must not run' not in log.read_text()
 setup({'UserPromptSubmit':[{'check':n} for n in ('one','two')]})
-payload = (root / 'tests/fixtures/hooks/claude/UserPromptSubmit-n.json').read_text()
+payload = (root / 'plugins/routing-kit/hooks/fixtures/claude/UserPromptSubmit-n.json').read_text()
 assert run(event='UserPromptSubmit', payload=payload)['hookSpecificOutput']['additionalContext'] == 'one\n\ntwo'
 check('continue', 'print(\'{"action":"continue","reason":"more"}\')')
 setup({'Stop':[{'check':n} for n in ('continue','one')]})
-payload = (root / 'tests/fixtures/hooks/claude/Stop-n.json').read_text()
+payload = (root / 'plugins/routing-kit/hooks/fixtures/claude/Stop-n.json').read_text()
 assert run(event='Stop', payload=payload) == {'decision':'block','reason':'more'}
 setup({})
 assert run('agy') == {'decision':'allow'}

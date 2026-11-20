@@ -303,8 +303,9 @@ def main():
         targets['claude'] = Path(a.claude_settings)
     recorded = state.get('hooks', {})
     plan, wanted = {}, {}
+    above_home = set(Path.home().parents)  # system folders above the home folder may be symlinks
     def check(p):
-        if any(q.is_symlink() for q in [p, *p.parents]):
+        if any(q not in above_home and q.is_symlink() for q in [p, *p.parents]):
             raise ValueError('symlink: '+str(p))
     if 'hooks_undo' in state:
         print('old hook backups (*.routing-kit.bak) are left as they are; delete them by hand if you want')

@@ -623,9 +623,9 @@ assert_eq "$sout" "$again" 'session start never advances cursor'
 inh=$(printf '{"session_id":"s1"}' | env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" KIT_BOARD_NAME=intruder KIT_BOARD_SESSION=other "$HOOK" claude)
 assert_eq "$sout" "$inh" 'session start ignores an inherited KIT_BOARD_NAME and KIT_BOARD_SESSION'
 # B1 (F2): Antigravity runs hooks in ~/.gemini/config, not in the repo, and names the session
-# conversationId (shape recorded in tests/fixtures/hooks/agy/SessionStart-n.json). The board line comes
+# conversationId (shape recorded in plugins/routing-kit/hooks/fixtures/agy/SessionStart-n.json). The board line comes
 # from the payload's cwd and conversationId.
-agy_payload=$(jq -c --arg cwd "$REPO_ROOT" '.cwd = $cwd | .conversationId = "conv-b1"' "$REPO_ROOT/tests/fixtures/hooks/agy/SessionStart-n.json")
+agy_payload=$(jq -c --arg cwd "$REPO_ROOT" '.cwd = $cwd | .conversationId = "conv-b1"' "$REPO_ROOT/plugins/routing-kit/hooks/fixtures/agy/SessionStart-n.json")
 mkdir -p "$shome/elsewhere"
 cp "$shome/kit/profile.json" "$shome/profile.claude-only"
 printf '%s\n' '{"version":1,"claude_plan":"pro","codex":"none","gemini":"pro"}' > "$shome/kit/profile.json"

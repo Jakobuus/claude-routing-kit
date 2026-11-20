@@ -137,6 +137,16 @@ setup; printf '  \n\n' > "$a"; cp "$a" "$s/ws"; run; ok '7 whitespace'; run --un
 # undo does not read or restore any backup file an older version left
 setup; printf 'Current\n' > "$a"; printf 'Ancient backup\n' > "$a.routing-kit.bak"; run; ok '7 sync with old bak'; run --undo; ok '7 undo with old bak'
 assert_eq 'Current' "$(cat "$a")" '7 undo ignores backups'; assert_eq 'Ancient backup' "$(cat "$a.routing-kit.bak")" '7 old backup left alone'
+# 8a. A home folder reached through a symlinked system folder (/tmp on a Mac, /home on Fedora Atomic) syncs;
+# a symlink from the home folder down is still refused.
+setup; mkdir -p "$s/real-homes/u"; ln -s "$s/real-homes" "$s/homes"; export HOME="$s/homes/u"
+c="$HOME/.claude"; x="$HOME/.codex"; g="$HOME/.gemini"; mkdir -p "$c" "$x" "$g"; a="$c/CLAUDE.md"
+run; ok '8a home under a symlinked system folder syncs'
+assert_contains "$(cat "$a")" "$START" '8a block written'
+setup; mkdir -p "$s/real-homes/u" "$s/dotfiles"; ln -s "$s/real-homes" "$s/homes"; export HOME="$s/homes/u"
+ln -s "$s/dotfiles" "$HOME/.claude"; c="$HOME/.claude"; x="$HOME/.codex"; g="$HOME/.gemini"; mkdir -p "$x" "$g"
+run; [ "$code" -ne 0 ] && pass || fail '8a symlinked ~/.claude accepted'
+assert_contains "$out" "symlink: $HOME/.claude" '8a names the symlink inside the home folder'
 # 8. Symlink refusal is atomic and one line.
 setup; printf 'Referent\n' > "$s/referent"; ln -s "$s/referent" "$d"
 before=$(snapshot); run

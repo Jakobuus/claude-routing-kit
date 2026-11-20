@@ -10,7 +10,7 @@ import tempfile
 
 def main():
     root = Path(__file__).resolve().parents[1]
-    fixtures = root.parents[1] / 'tests/fixtures/hooks'
+    fixtures = root / 'hooks/fixtures'  # inside the plugin: a Claude Code plugin install ships only plugins/routing-kit
     passed = failed = 0
     with tempfile.TemporaryDirectory(prefix='kit-selftest-hooks-') as directory:
         scratch = Path(directory)

@@ -86,9 +86,12 @@ def main():
     targets = {'claude': homes['claude'] / 'CLAUDE.md', 'codex': override if override.exists() and override.stat().st_size else homes['codex'] / 'AGENTS.md', 'gemini': homes['gemini'] / 'AGENTS.md'}
     config = homes['codex'] / 'config.toml'
     private = Path(args.private_rules) if args.private_rules else home / 'private/rules.md'
+    # Folders above the home folder belong to the system (/tmp on a Mac, /home on Fedora Atomic are
+    # symlinks); only the target and folders from the home folder down must be real.
+    above_home = set(Path.home().parents)
     def check(p):
         for q in [p] + list(p.parents):
-            if q.is_symlink():
+            if q not in above_home and q.is_symlink():
                 raise ValueError('symlink: ' + str(q))
         if p.exists() and not p.is_file():
             raise ValueError('not a regular file: ' + str(p))

@@ -85,11 +85,22 @@ for agent in claude codex agy; do
     if printf '%s\n' "$out" | grep -Fxq "ok $agent $case_name"; then pass; else fail "$agent $case_name"; fi
   done
 done
+# A Claude Code plugin install ships only plugins/routing-kit (no tests/): the selftest must pass there.
+plugin_only="$scratch/plugin-cache/routing-kit/0.4.1"
+mkdir -p "$plugin_only"
+cp -R "$REPO_ROOT/plugins/routing-kit/." "$plugin_only/"
+po_out=$(run_with_timeout 40 env HOME="$scratch/home" TMPDIR="$scratch/tmp" XDG_CONFIG_HOME="$scratch/config" \
+  ROUTING_KIT_HOME="$scratch/config/routing-kit" DOUBLE_SHOT_LATTE=0 "$plugin_only/bin/kit-selftest" --hooks 2>&1)
+po_code=$?
+if [ "$po_code" = 0 ] && printf '%s\n' "$po_out" | grep -Eq '^hooks selftest: [0-9]+ ok, 0 failed$'; then
+  pass
+else
+  fail "hooks selftest passes from a plugin-only copy (exit $po_code): $(printf '%s\n' "$po_out" | tail -3)"
+fi
 # A session-start command that exits 42 must fail the selftest (it used to pass: 34 ok, 0 failed).
 copy="$scratch/broken-kit"
-mkdir -p "$copy/plugins" "$copy/tests/fixtures"
+mkdir -p "$copy/plugins"
 cp -R "$REPO_ROOT/plugins/routing-kit" "$copy/plugins/routing-kit"
-cp -R "$REPO_ROOT/tests/fixtures/hooks" "$copy/tests/fixtures/hooks"
 printf '#!/bin/sh\nexit 42\n' > "$copy/plugins/routing-kit/hooks/session-start"
 chmod +x "$copy/plugins/routing-kit/hooks/session-start"
 bad_out=$(run_with_timeout 40 env HOME="$scratch/home" TMPDIR="$scratch/tmp" XDG_CONFIG_HOME="$scratch/config" \

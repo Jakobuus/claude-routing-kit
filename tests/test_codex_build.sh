@@ -1317,6 +1317,10 @@ out=$(env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
 code=$?
 run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
 assert_eq 0 "$code" "direct build succeeds"
+assert_eq 1 "$(printf '%s\n' "$out" | grep -c '^next:')" 'direct next appears once'
+[ -f "$run_dir/result.md" ] && pass || fail 'direct result.md exists'
+assert_contains "$(printf '%s\n' "$out" | tail -2 | head -1)" 'next:' 'direct next immediately before exit'
+
 if [ ! -e "$run_dir/wt" ] && [ ! -e "$home/retained" ] && [ -s "$run_dir/build.patch" ]; then
   pass
 else
@@ -1388,6 +1392,31 @@ code=$?
 run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
 assert_eq 0 "$code" "a commit in the source repo during a direct build does not break staging"
 assert_contains "$(cat "$run_dir/build.patch" 2>/dev/null)" "+++ b/hello.txt" "the patch is made after the source moved on"
+
+# A successful no-change run always gives one usable next step and result.
+for final in present absent; do
+  home=$(mktmp); fakebin=$(mktmp)
+  cat > "$fakebin/codex" <<'EOF'
+#!/bin/bash
+cat >/dev/null
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = -o ]; then
+    shift
+    [ "$TEST_FINAL" != present ] || printf 'Final answer from Codex\n' > "$1"
+  fi
+  shift
+done
+exit 0
+EOF
+  chmod +x "$fakebin/codex"
+  out=$(env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" TEST_FINAL="$final" "$BIN" --repo "$src" --name nochange --brief "$d/brief.md" 2>&1)
+  assert_eq 0 "$?" "no-change $final final status"
+  run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d | head -1)
+  assert_eq 1 "$(printf '%s\n' "$out" | grep -c '^next:')" "no-change $final next once"
+  assert_eq "next: no changes were made; read $run_dir/result.md" "$(printf '%s\n' "$out" | tail -2 | head -1)" 'no-change next before exit'
+  if [ "$final" = present ]; then expected='Final answer from Codex'; else expected='(no final message from Codex; exit 0)'; fi
+  assert_eq "$expected" "$(cat "$run_dir/result.md")" "no-change $final result contents"
+done
 
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

@@ -171,12 +171,15 @@ GUIDE_DATE=$(jq -r .checked "$PLUGIN_ROOT/rules/models.json")
 d=$(mktmp); mkdir -p "$d/.config/routing-kit"
 mkprofile "$d/.config/routing-kit/profile.json" pro none false false false false
 RK="$d/.config/routing-kit"
-fresh=$(env KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$RK" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
+# The hook runs inside Claude Code, so claude is on PATH; a stub keeps the setup check (kit-doctor --fast)
+# quiet on machines without it (CI), so only the guide line can differ.
+stubbin=$(mktmp); printf '#!/bin/sh\nexit 0\n' > "$stubbin/claude"; chmod +x "$stubbin/claude"
+fresh=$(env PATH="$stubbin:$PATH" KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$RK" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
 table=$("$PLUGIN_ROOT/bin/kit-routing-table" --profile "$RK/profile.json")
 case "$fresh" in *"Routing guide"*) fail "fresh guide: hook prints a guide line";; *) pass;; esac
 # A fresh guide adds nothing after the table: the output ends with the table.
 case "$fresh" in *"$table") pass;; *) fail "fresh guide: output does not end with the table";; esac
-stale=$(env KIT_GUIDE_TODAY=2099-01-01 ROUTING_KIT_HOME="$RK" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
+stale=$(env PATH="$stubbin:$PATH" KIT_GUIDE_TODAY=2099-01-01 ROUTING_KIT_HOME="$RK" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
 code=$?
 assert_eq 0 "$code" "stale guide: hook exits 0"
 assert_contains "$stale" "Routing guide is " "stale guide: line shown"
@@ -344,7 +347,7 @@ all_profile() { # FILE MAIN
 mk_notes_home() { # DIR
   mkdir -p "$1/cache" "$1/codex"
   : > "$1/cache/agy-refresh.stamp"
-  printf 'gemini-4-argon-high\ngemini-4-hydrogen-medium\ngemini-4-hydrogen-high\ngemini-3.8-flash-medium\n' > "$1/cache/agy-models.txt"
+  printf 'gemini-4-argon-high\ngemini-4-hydrogen-medium\ngemini-4-hydrogen-low\ngemini-3.8-flash-medium\n' > "$1/cache/agy-models.txt"
   printf '%s' '{"models":[{"slug":"gpt-6-sol"},{"slug":"gpt-6.1-terra"},{"slug":"gpt-6-astra"},{"slug":"gpt-6-luna"}]}' > "$1/codex/models_cache.json"
 }
 for m in claude codex gemini; do
@@ -364,7 +367,7 @@ for m in claude codex gemini; do
   case "$out" in *"rules did not load"*) fail "$m main, worst case: repair message instead of rules";; *) pass;; esac
   assert_contains "$out" "## Your routing table" "$m main, worst case: table kept"
   assert_contains "$out" "Note: gpt-6.1-sol is not offered by your codex CLI; using gpt-6-sol." "$m main, worst case: first Note kept"
-  assert_contains "$out" "Note: gemini-4-hydrogen-low is not offered by your gemini CLI and has no usable fallback; leaving it out." "$m main, worst case: second Note kept"
+  assert_contains "$out" "Note: gemini-4-hydrogen-high is not offered by your gemini CLI and has no usable fallback; leaving it out." "$m main, worst case: second Note kept"
   assert_contains "$out" "Routing guide is " "$m main, worst case: stale line kept"
   assert_contains "$out" "delegating" "$m main, worst case: the other rules kept"
 done
@@ -412,7 +415,7 @@ case "$out" in *"rules did not load"*) fail "far too long: bare repair text prin
 assert_contains "$out" "## Your routing table" "far too long: table kept"
 assert_contains "$out" "| Work | Use |" "far too long: table rows kept"
 assert_contains "$out" "Note: gpt-6.1-sol is not offered by your codex CLI" "far too long: first Note kept"
-assert_contains "$out" "Note: gemini-4-hydrogen-low is not offered" "far too long: second Note kept"
+assert_contains "$out" "Note: gemini-4-hydrogen-high is not offered" "far too long: second Note kept"
 assert_contains "$out" "Routing guide is " "far too long: stale line kept"
 assert_contains "$out" "Kit commands live in " "far too long: bin line kept"
 [ $(printf '%s' "$out" | wc -c | tr -d ' ') -le "$BUDGET" ] && pass || fail "far too long: output over"

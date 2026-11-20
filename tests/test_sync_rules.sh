@@ -417,5 +417,15 @@ assert_contains "$(cat "$a")" 'Linked private rule' 'symlinked private rules are
 # A private rules link to a missing file is refused, never silently skipped.
 setup; mv "$ROUTING_KIT_HOME/private/rules.md" "$s/gone.md"; ln -s "$s/missing.md" "$ROUTING_KIT_HOME/private/rules.md"
 run; [ "$code" -ne 0 ] && pass || fail 'broken private rules link refused'
+# Configured roots may live below a system symlink outside HOME.
+setup
+mkdir -p "$s/real-system"; ln -s "$s/real-system" "$s/system"
+mv "$ROUTING_KIT_HOME" "$s/real-system/kit"; export ROUTING_KIT_HOME="$s/system/kit"
+mv "$CODEX_HOME" "$s/real-system/codex"; export CODEX_HOME="$s/system/codex"
+x="$CODEX_HOME"; b="$x/AGENTS.md"
+mv "$c" "$s/real-system/claude"; c="$s/system/claude"
+mv "$g" "$s/real-system/gemini"; g="$s/system/gemini"
+run; ok 'configured roots below system symlink sync'
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

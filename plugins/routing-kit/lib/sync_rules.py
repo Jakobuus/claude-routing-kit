@@ -86,15 +86,15 @@ def main():
     targets = {'claude': homes['claude'] / 'CLAUDE.md', 'codex': override if override.exists() and override.stat().st_size else homes['codex'] / 'AGENTS.md', 'gemini': homes['gemini'] / 'AGENTS.md'}
     config = homes['codex'] / 'config.toml'
     private = Path(args.private_rules) if args.private_rules else home / 'private/rules.md'
-    # Folders above the home folder belong to the system (/tmp on a Mac, /home on Fedora Atomic are
-    # symlinks); only the target and folders from the home folder down must be real.
-    above_home = set(Path.home().parents)
+    # System parents may be symlinks; configured roots and their contents may not.
+    roots = [home] + list(homes.values())
+    above_roots = {parent for folder in roots for parent in folder.parents}
     def check(p):
         for q in [p] + list(p.parents):
-            if q not in above_home and q.is_symlink():
-                raise ValueError('symlink: ' + str(q))
+            if (q not in above_roots or any(q == folder or folder in q.parents for folder in roots)) and q.is_symlink():
+                raise ValueError('symlink: '+str(q))
         if p.exists() and not p.is_file():
-            raise ValueError('not a regular file: ' + str(p))
+            raise ValueError('not a regular file: '+str(p))
     # The private rules file is only read, so it may be a symlink (e.g. into the owner's own git).
     for p in list(targets.values()) + [override, config, statepath]:
         check(p)

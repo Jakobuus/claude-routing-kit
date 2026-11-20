@@ -196,20 +196,18 @@ if [ "$have_claude" = yes ]; then
   resolve claude "$claude_build"; c_build="$RESOLVED"
   resolve claude "$claude_lookup"; c_lookup="$RESOLVED"
 fi
-x_strong=""; x_review=""; x_build=""; x_screens=""; x_lookup=""
+x_strong=""; x_build=""; x_screens=""; x_lookup=""
 if [ "$have_codex" = yes ]; then
   resolve codex "$codex_strong"; x_strong="$RESOLVED"
-  resolve codex "$codex_review"; x_review="$RESOLVED"
   resolve codex "$codex_build"; x_build="$RESOLVED"
   resolve codex "$codex_screens"; x_screens="$RESOLVED"
   resolve codex "$codex_lookup"; x_lookup="$RESOLVED"
 fi
-g_build=""; g_long=""; g_mid=""; g_lookup=""; g_research=""
+g_build=""; g_long=""; g_mid=""; g_research=""
 if [ "$have_gemini" = yes ]; then
   resolve gemini "$gemini_build"; g_build="$RESOLVED"
   resolve gemini "$gemini_long"; g_long="$RESOLVED"
   resolve gemini "$gemini_mid"; g_mid="$RESOLVED"
-  resolve gemini "$gemini_lookup"; g_lookup="$RESOLVED"
   resolve gemini "$gemini_research"; g_research="$RESOLVED"
 fi
 
@@ -238,13 +236,13 @@ list_reset
 [ -z "$c_strong" ] || add_item "Claude $c_strong"
 [ -z "$g_long" ] || add_item "Gemini $g_long"
 companies=0
-[ "$have_claude" != yes ] || companies=$((companies+1))
-[ "$have_codex" != yes ] || companies=$((companies+1))
-[ "$have_gemini" != yes ] || companies=$((companies+1))
+[ -z "$c_strong" ] || companies=$((companies+1))
+[ -z "$x_strong" ] || companies=$((companies+1))
+[ -z "$g_long" ] || companies=$((companies+1))
 if [ "$companies" -gt 1 ]; then
  row Review "a strong model from another company than the builder: $LIST"
 else
- row Review "a fresh $m_label $m_strong session that did not build it"
+ [ -z "$LIST" ] || row Review "a fresh $LIST session that did not build it"
 fi
 second=""
 if [ "$MAIN" = claude ]; then

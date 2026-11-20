@@ -67,7 +67,7 @@ Claude Code, Codex or Antigravity can lead (Antigravity as lead is not tested en
 
 Setup offers two guards: one against destructive commands, and one that stops agents working in other repos from editing files in folders you name as your own (`kit-profile set owner_checkouts '["/path"]'`). Both are off unless you say yes; they are a seatbelt against agent mistakes, not a security boundary. Codex: `kit-sync hooks` runs the hooks selftest and, only if it passes, marks the kit hooks trusted in Codex (one marked block at the end of `$CODEX_HOME/config.toml`, by default `~/.codex/config.toml`), so they also run in `codex exec`. A failed selftest or `--undo` removes that block if it is still the exact last part of the file; otherwise kit-sync says so and you remove it by hand. If kit-sync prints a trust warning, check `/hooks` in Codex.
 
-Your private rules belong in `~/.config/routing-kit/private/rules.md` (or `$ROUTING_KIT_HOME/private/rules.md` if you set ROUTING_KIT_HOME). When migrating, move your text there by hand and empty the old file before running `kit-sync rules`. Run `kit-profile set kit_rules replace` only once the private file holds your full rules. The kit then keeps only its own board and media section and the routing table.
+Your private rules belong in `~/.config/routing-kit/private/rules.md` (or `$ROUTING_KIT_HOME/private/rules.md` if you set ROUTING_KIT_HOME). When migrating, move your text there by hand and empty the old file before running `kit-sync rules`. Run `kit-profile set kit_rules replace` only once the private file holds your full rules. The kit then keeps only the private rules file and the routing table.
 
 ## Usage and build commands
 
@@ -134,7 +134,7 @@ it is and print its path.
 | `--repo DIR` | Required; may name the repo root or a subfolder. Builds from committed HEAD. |
 | `--effort E` | Optional; passed to Antigravity. Unset leaves its default. |
 | `--timeout SECS` | 1800 seconds. |
-| `KIT_AGY_IDLE_SECS` | 900 seconds (15 minutes) without changes to worktree files or captured output before stopping the process group and saving its patch. |
+| `KIT_AGY_IDLE_SECS` | 1800 seconds (30 minutes) without changes to worktree files or captured output before stopping the process group and saving its patch. |
 | `KIT_AGY_TIMEOUT_GRACE` | 60 seconds beyond the requested timeout before the wrapper stops the process. |
 
 ### kit-retained

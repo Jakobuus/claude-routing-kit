@@ -179,6 +179,8 @@ label='run directory contains build.patch with generated change'; check grep -q 
 label='workspace discovered from workspace list'; check jq -e '.workspace == "workspace-762"' "$run/manifest.json"
 label='single truthful archive report'; check test "$(printf '%s\n' "$out" | grep -c 'archived=false')" -eq 0
 label='separator stripped from nonempty result'; check test "$(cat "$run/result.md")" = 'stub final message'
+label='Paseo next appears once'; check test "$(printf '%s\n' "$out" | grep -c '^next:')" = 1
+label='Paseo next immediately before exit'; check test "$(printf '%s\n' "$out" | tail -2 | head -1 | cut -c1-5)" = next:
 label='run directory contains final result.md'; check grep -qx 'stub final message' "$run/result.md" 2>/dev/null
 label='run directory contains manifest identifying the agent'; check jq -e '.agent == "agent-from-paseo-762"' "$run/manifest.json" 2>/dev/null
 # Regression: archive takes the manifest agent id, and success is recorded

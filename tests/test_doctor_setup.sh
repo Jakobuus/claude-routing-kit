@@ -34,7 +34,7 @@ case "$name:$1" in
 claude:auth) [ "${BAD_AUTH:-}" = claude ] && echo '{"loggedIn":false}' || echo '{"loggedIn":true}' ;;
 codex:login) [ "${BAD_AUTH:-}" != codex ] || exit 1; echo 'Logged in using ChatGPT' ;;
 agy:models) [ "${BAD_AUTH:-}" != gemini ] || exit 1; echo 'gemini-4-argon-high Model' ;;
-paseo:status) echo '{"localDaemon":"'"${DAEMON:-running}"'","providers":[{"provider":"claude","available":true},{"provider":"codex","available":true},{"provider":"gemini","available":true}]}' ;;
+paseo:status) [ "${BAD_STATUS:-}" != yes ] || exit 1; echo '{"localDaemon":"'"${DAEMON:-running}"'","providers":[{"provider":"claude","available":true},{"provider":"codex","available":true},{"provider":"gemini","available":true}]}' ;;
 paseo:plugin) echo 'PLUGIN STATUS ENABLED SOURCE DIRECTORY'; echo "${PILL_NAME:-routing-kit-pill} ${PILL:-running} yes local ${PILL_PATH:-/plugins/paseo-pill}" ;;
 esac
 '''
@@ -78,6 +78,21 @@ r=run('--setup'); check(r.returncode==0 and 'recommended: Paseo' in r.stdout,'op
 write(kit/'profile.json',profile); r=run('--setup'); check(r.returncode==1 and 'fix   paseo' in r.stdout,'chosen missing Paseo fails')
 r=run('--fast'); check(r.stdout.startswith('routing kit: ') and 'Paseo' in r.stdout and len(r.stdout.splitlines())==1,'fast missing Paseo')
 (bins/'paseo.off').rename(bins/'paseo'); reset()
+for chosen in (False, True):
+    write(kit/'profile.json',dict(profile,paseo=chosen,codex_build_transport='direct'))
+    for env in ({'BAD_STATUS':'yes'}, {'DAEMON':'stopped'}, {'PILL':'stopped'}):
+        r=run('--setup',**env)
+        check(r.returncode==int(chosen), 'Paseo problems required only when chosen: '+str((chosen,env)))
+reset()
+(bins/'paseo').rename(bins/'paseo.off')
+app=home/'Paseo.app'; app.mkdir()
+for args in (('--setup',), ('--fast',)):
+    r=run(*args,ROUTING_KIT_TEST_PASEO_APP=str(app))
+    check('paseo command on PATH' in r.stdout, 'app without CLI needs PATH fix '+str(args))
+(bins/'paseo.off').rename(bins/'paseo'); reset()
+empty=dict(sync,links={}); write(kit/'sync-state.json',empty)
+r=run('--setup'); check(r.returncode==1 and 'fix   skills' in r.stdout,'undone skills need sync')
+write(kit/'sync-state.json',sync)
 r=run('--setup',DAEMON='stopped'); check(r.returncode==1 and 'paseo daemon' in r.stdout,'stopped daemon fails')
 r=run('--setup',PILL_NAME='custom',PILL_PATH='/plugins/limits-pill'); check(r.returncode==0,'pill recognized by directory')
 r=run('--setup',PILL='stopped'); check(r.returncode==1 and 'paseo plugin install' in r.stdout,'pill install fix')

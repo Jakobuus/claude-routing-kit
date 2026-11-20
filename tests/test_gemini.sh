@@ -133,7 +133,7 @@ assert_no_watchdog() {
   esac
 }
 watch_out=$(env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" "$BIN" --repo "$repo" --name watchdog --brief "$brief" --timeout 30)
-watch_run=$(printf '%s\n' "$watch_out" | tail -2 | head -1 | sed 's/.*run dir: //')
+watch_run=$(printf '%s\n' "$watch_out" | sed -n 's/^kit-gemini-build: run dir: //p')
 assert_no_watchdog "$watch_run/watchdog-watchdog$" 'successful build'
 out=$(env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" KIT_AGY_CASE=denied "$BIN" --repo "$repo" --name denied --brief "$brief" 2>&1)
 assert_contains "$out" 'WARNING: agy denied actions' 'denied actions warn loudly'

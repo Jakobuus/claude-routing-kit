@@ -369,5 +369,24 @@ for agent in ('claude','codex','agy'):
  assert s.command_for(root,agent,True,'SessionStart') in s.commands_of(entries)
 R2PY
 result 'every agent registers the kit session-start command next to kit-hook SessionStart' "$?"
+# Configured roots may live below a system symlink outside HOME.
+setup settings
+mkdir -p "$s/real-system"; ln -s "$s/real-system" "$s/system"
+mv "$ROUTING_KIT_HOME" "$s/real-system/kit"; export ROUTING_KIT_HOME="$s/system/kit"
+mv "$CODEX_HOME" "$s/real-system/codex"; export CODEX_HOME="$s/system/codex"
+mkdir -p "$s/system/claude"
+mv "$settings" "$s/system/claude/settings.json"; settings="$s/system/claude/settings.json"
+mkdir -p "$s/system/gemini/config"; mv "$agy" "$s/system/gemini/config/hooks.json"; agy="$s/system/gemini/config/hooks.json"
+run; assert_eq 0 "$code" 'configured roots below system symlink sync'
+mv "$CODEX_HOME" "$s/real-system/real-codex"; ln -s "$s/real-system/real-codex" "$CODEX_HOME"
+run; [ "$code" -ne 0 ] && pass || fail 'symlinked agent folder accepted'
+assert_contains "$out" "symlink: $CODEX_HOME" 'names symlinked agent component'
+setup settings
+mkdir -p "$s/gemini" "$s/real-config"; ln -s "$s/real-config" "$s/gemini/config"
+agy="$s/gemini/config/hooks.json"
+run; [ "$code" -ne 0 ] && pass || fail 'symlink below agent folder accepted'
+assert_contains "$out" "symlink: $s/gemini/config" 'names nested symlink component'
+
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

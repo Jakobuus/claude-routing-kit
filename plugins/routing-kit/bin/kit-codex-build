@@ -136,6 +136,14 @@ esac
 # only touches the run dir's wt/home/cfg/tmp); run_dir is still empty on
 # exits before run_export, and it does nothing for an empty path.
 codex_pid=""
+print_next() {
+  [ "$code" -eq 0 ] || return 0
+  if [ -s "$run_dir/build.patch" ]; then
+    echo "next: git apply --index $run_dir/build.patch, run the checks, have the diff reviewed, commit"
+  else
+    echo "next: no changes were made; read $run_dir/result.md"
+  fi
+}
 on_exit() {
   code=$?
   # If the script is cut short (SIGTERM/SIGINT, or a kit_die) while codex is
@@ -176,13 +184,12 @@ on_exit() {
     # Direct mode: the same last line as Paseo, on every exit once a run exists.
     direct_patch=""
     [ ! -f "$run_dir/build.patch" ] || direct_patch=$run_dir/build.patch
-    if [ "$code" -eq 0 ]; then
-      if [ -s "$run_dir/build.patch" ]; then
-        echo "next: git apply --index $run_dir/build.patch, run the checks, have the diff reviewed, commit"
-      else
-        echo "next: no changes were made; read $run_dir/result.md"
-      fi
+    if [ -s "$run_dir/final-message.txt" ]; then
+      cp "$run_dir/final-message.txt" "$run_dir/result.md"
+    else
+      echo "(no final message from Codex; exit $code)" > "$run_dir/result.md"
     fi
+    print_next
     echo "kit-codex-build: exit=$code patch=$direct_patch result=$run_dir/codex-output.txt"
   fi
   if [ -n "${paseo_started:-}" ]; then
@@ -199,6 +206,7 @@ on_exit() {
         paseo_kept=" worktree=$run_dir/wt (worktree kept: ${paseo_kept_why:-cleanup ${paseo_cleanup:-pending}})"
       fi
     fi
+    print_next
     echo "kit-codex-build: exit=$code patch=$paseo_patch result=$run_dir/result.md$paseo_kept"
   fi
   exit "$code"
@@ -334,10 +342,5 @@ fi
 run_build_patch_fresh "$wt" "$REPO" "$BASE" || exit 4
 cat "$run_dir/build.patch"
 echo "kit-codex-build: run dir: $run_dir"
-if [ -s "$run_dir/build.patch" ]; then
-  echo "next: git apply --index $run_dir/build.patch, run the checks, have the diff reviewed, commit"
-else
-  echo "next: no changes were made; read $run_dir/result.md"
-fi
 echo "kit-codex-build: build patch: $run_dir/build.patch"
 # The last line (exit=0 patch=... result=...) is printed by the exit trap, like on every other exit.

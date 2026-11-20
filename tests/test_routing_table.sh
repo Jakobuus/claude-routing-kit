@@ -82,7 +82,7 @@ done
 # routing defaults. Keep the audit on routing code rather than every tracked file.
 ids=$(/usr/bin/jq -r '[.claude, .codex, .gemini, .kimi, .glm] | map(del(.base_url, .host)) | .[] | .[] | select(type == "string")' "$(dirname "$RT")/../rules/models.json" | sort -u)
 for id in $ids; do
-  if git -C "$REPO_ROOT" grep -l -F -w -- "$id" -- . ':!tests' ':!plugins/routing-kit/rules/models.json' ':!plugins/routing-kit/guide' ':!README.md' ':!plugins/routing-kit/lib/doctor.py' ':!plugins/routing-kit/lib/selftest_hooks.py' ':!plugins/routing-kit/hooks/checks/delegation.py' | grep -q .; then
+  if git -C "$REPO_ROOT" grep -l -F -w -- "$id" -- . ':!tests' ':!plugins/routing-kit/hooks/fixtures' ':!plugins/routing-kit/rules/models.json' ':!plugins/routing-kit/guide' ':!README.md' ':!plugins/routing-kit/lib/doctor.py' ':!plugins/routing-kit/lib/selftest_hooks.py' ':!plugins/routing-kit/hooks/checks/delegation.py' | grep -q .; then
     fail "model id outside models.json: $id"
   else pass; fi
 done
@@ -256,7 +256,7 @@ printf '%s' '{"models":[{"slug":"gpt-6-sol"},{"slug":"gpt-6.1-terra"},{"slug":"g
 t=$(env CODEX_HOME="$cx" "$RT" --profile "$p/profile.json"); code=$?
 assert_eq 0 "$code" "missing sol 6.1 still exits 0"
 assert_contains "$t" "| Features, fixes, tests | Codex gpt-6-sol · Claude sonnet" "build row falls back to gpt-6-sol"
-assert_contains "$t" "Codex gpt-6-astra" "review row falls back"
+assert_contains "$(row_of "$t" "Review")" "Codex gpt-6-astra" "Review names the available strong Codex model"
 assert_contains "$t" "Note: gpt-6.1-sol is not offered by your codex CLI; using gpt-6-sol. Check for a kit update." "fallback Note line"
 case "$t" in *"| Screenshots"*"gpt-6.1-terra"*) pass;; *) fail "terra stays when offered";; esac
 # the Note comes after the table
@@ -272,6 +272,14 @@ assert_contains "$t" "| Features, fixes, tests | Claude sonnet |" "build row dro
 assert_contains "$t" "| Review | a strong model from another company than the builder: Codex gpt-6-astra · Claude opus |" "review keeps Codex as the strong reviewer when the everyday one is missing"
 assert_contains "$t" "gpt-6-luna" "luna still shown"
 
+printf '%s' '{"models":[{"slug":"gpt-6.1-sol"},{"slug":"gpt-6.1-terra"},{"slug":"gpt-6-luna"}]}' > "$cx/models_cache.json"
+t=$(env CODEX_HOME="$cx" "$RT" --profile "$p/profile.json")
+assert_eq '| Review | a fresh Claude opus session that did not build it |' "$(row_of "$t" "Review")" 'missing strong Codex reviewer leaves one company'
+# Unused roles must not emit availability notes.
+/usr/bin/jq '.codex.review = "gpt-unused-review"' "$(dirname "$RT")/../rules/models.json" > "$p/unused.json"
+t=$(env CODEX_HOME="$cx" "$RT" --profile "$p/profile.json" --models "$p/unused.json")
+assert_not_contains "$t" 'gpt-unused-review' 'unused Codex reviewer has no Note'
+
 # claude is always unknown: Fable never falls back
 mkf max5 none none false false false
 t=$("$RT" --profile "$p/profile.json")
@@ -284,21 +292,24 @@ gk=$(mktmp); mkdir -p "$gk/cache"
 printf 'gemini-4-argon-high\ngemini-4-hydrogen-medium\ngemini-4-hydrogen-high\ngemini-3.8-flash-medium\n' > "$gk/cache/agy-models.txt"
 t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json")
 case "$t" in *gemini-3.8-flash*) fail "no flash fallback when hydrogen-low is missing";; *) pass;; esac
-assert_contains "$t" "Note: gemini-4-hydrogen-low is not offered by your gemini CLI and has no usable fallback; leaving it out. Check for a kit update." "gemini no-fallback Note"
+assert_not_contains "$t" "Note: gemini-4-hydrogen-low" "unused Gemini lookup emits no Note"
 printf 'gemini-4-argon-high\ngemini-4-hydrogen-medium\ngemini-4-hydrogen-high\ngemini-4-hydrogen-low\n' > "$gk/cache/agy-models.txt"
 t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json")
 case "$t" in *"Note:"*|*flash*) fail "complete gemini list: no Note, no flash";; *) pass;; esac
+/usr/bin/jq '.gemini.lookup = "gemini-unused-lookup"' "$(dirname "$RT")/../rules/models.json" > "$p/unused.json"
+t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json" --models "$p/unused.json")
+assert_not_contains "$t" 'gemini-unused-lookup' 'unused Gemini lookup has no Note'
 # Exploration row under availability: research missing -> no exploration row (never Argon); long read missing -> research;
 # both missing -> no exploration row.
 printf 'gemini-4-argon-high\ngemini-4-hydrogen-medium\ngemini-4-hydrogen-low\n' > "$gk/cache/agy-models.txt"
 t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json")
 assert_not_contains "$(row_of "$t" "Exploration")" "Gemini" "missing research leaves other research lanes"
-assert_contains "$t" "Gemini gemini-4-argon-high" "research unavailable: the long-output row stays"
+assert_contains "$(row_of "$t" "Review")" "Gemini gemini-4-argon-high" "Review keeps available Gemini reviewer"
 printf 'gemini-4-hydrogen-medium\ngemini-4-hydrogen-high\ngemini-4-hydrogen-low\n' > "$gk/cache/agy-models.txt"
 t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json")
 assert_contains "$(row_of "$t" "Exploration")" "Gemini gemini-4-hydrogen-high" "long read unavailable: exploration uses research"
 case "$(row_of "$t" "Exploration")" in *"only when it is not enough"*) fail "long read unavailable: no fallback clause";; *) pass;; esac
-case "$t" in *"Very long single outputs"*) fail "long read unavailable: no long-output row";; *) pass;; esac
+assert_eq "| Review | a fresh Claude opus session that did not build it |" "$(row_of "$t" "Review")" "missing Gemini reviewer uses a fresh Claude session"
 printf 'gemini-4-hydrogen-medium\ngemini-4-hydrogen-low\n' > "$gk/cache/agy-models.txt"
 t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json")
 assert_not_contains "$(row_of "$t" "Exploration")" "Gemini" "both unavailable leave other research lanes"

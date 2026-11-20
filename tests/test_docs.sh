@@ -46,6 +46,12 @@ assert_contains "$(cat "$START")" "Turn on the guard for owner checkouts?" "STAR
 assert_contains "$(cat "$START")" 'blocks: {"destructive": <true|false>, "owner_checkout": <true|false>}' "START-HERE names the blocks setting"
 assert_contains "$(cat "$START")" 'kit-profile set blocks' "START-HERE saves the blocks setting"
 
+assert_contains "$(cat "$README")" '| `KIT_AGY_IDLE_SECS` | 1800 seconds (30 minutes)' 'documented idle default'
+for f in "$README" "$START"; do
+  assert_contains "$(cat "$f")" 'private rules file and the routing table' 'replace mode contents'
+done
+assert_contains "$(cat "$START")" '"Exploration, big reads, web research" row' 'current exploration row name'
+
 # --- commands named in the docs exist ---------------------------------------
 cmds=$(cat "$README" "$START" \
   | grep -oE '(^|[^-A-Za-z0-9_/.])(kit-[a-z][a-z-]*|locked-build)' \

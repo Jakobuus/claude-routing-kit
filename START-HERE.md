@@ -394,7 +394,7 @@ The hook's command is the clone's full path. If they ever move the clone, run
 
 ## Step 7b: Share rules, skills and hooks (every main agent)
 
-If they have their own CLAUDE.md or AGENTS.md text, move it by hand to `~/.config/routing-kit/private/rules.md` (or `$ROUTING_KIT_HOME/private/rules.md` if they set ROUTING_KIT_HOME), and empty the old file before syncing. There is no automatic adoption. Run `kit-profile set kit_rules replace` only once that file holds their full rules. The kit then keeps only its own board and media section and the routing table.
+If they have their own CLAUDE.md or AGENTS.md text, move it by hand to `~/.config/routing-kit/private/rules.md` (or `$ROUTING_KIT_HOME/private/rules.md` if they set ROUTING_KIT_HOME), and empty the old file before syncing. There is no automatic adoption. Run `kit-profile set kit_rules replace` only once that file holds their full rules. The kit then keeps only the private rules file and the routing table.
 
 Run `kit-sync all --dry-run`, name the files it will touch, and ask. If they say yes, run `kit-sync all`. Codex and Antigravity get the blocks, the delegation check and media routing only through this step. `kit-sync hooks` runs `kit-selftest --hooks` and, only if it passes, marks the kit's Codex hooks trusted in `~/.codex/config.toml` (so they also run in scripted `codex exec` runs, with no `/hooks` step). If the selftest fails the trust is removed again and the command exits 1; Codex then skips the kit hooks until it passes.
 
@@ -469,7 +469,7 @@ Show them, briefly, that the setup check passed (only if it did), and:
    `--no-paseo` override it. Build copies are deleted once their work is saved; otherwise they are kept, in
    `retained` (see `kit-retained`) or, for refused or pending runs, in their run folder.
    Blocking guards get 10 seconds each; `hook-errors.log` entries have timestamps.
-   With Gemini available, the "Exploration, big reads" row uses its research model to write a
+   With Gemini available, the "Exploration, big reads, web research" row uses its research model to write a
    summary of facts and decide nothing.
 6. **How to update.** Claude Code:
    ```

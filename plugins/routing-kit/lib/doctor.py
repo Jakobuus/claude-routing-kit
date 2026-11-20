@@ -45,7 +45,9 @@ def valid_profile(profile, require_main=False):
 
 def paseo_installed():
     import sys
-    return bool(shutil.which('paseo') or (sys.platform == 'darwin' and Path('/Applications/Paseo.app').is_dir()))
+    app = os.environ.get('ROUTING_KIT_TEST_PASEO_APP')
+    return bool(shutil.which('paseo') or
+                ((sys.platform == 'darwin' or app) and Path(app or '/Applications/Paseo.app').is_dir()))
 
 
 def probe(command):
@@ -121,7 +123,7 @@ def setup_checks(kit, homes, drift):
     sync = load(kit/'sync-state.json')
     for name, key, kinds in (('rules', 'files', ('edited_by_hand',)), ('skills', 'links', ('skill_missing',)),
                              ('hooks', 'hooks', ('hook_drift', 'hook_timeout'))):
-        ok = key in sync and not any(f['check'] in kinds for f in drift)
+        ok = bool(sync.get(key)) and not any(f['check'] in kinds for f in drift)
         add(name, ok, fix='run kit-sync '+name)
     if 'codex' in agents:
         import codex_trust
@@ -144,11 +146,22 @@ def setup_checks(kit, homes, drift):
         add('codex_build_transport', True, profile.get('codex_build_transport', 'direct'))
         recommend('Paseo lets you watch and stop builds from the app or your phone, keeps builds running, and shows your usage; see START-HERE step 5')
         return rows
+    if not shutil.which('paseo'):
+        if chosen:
+            add('paseo installed', False, fix='put the paseo command on PATH; see START-HERE step 5')
+        else:
+            recommend('Put the paseo command on PATH to use Paseo; see START-HERE step 5')
+        return rows
+    def paseo_check(check, ok, message='', fix=''):
+        if chosen or ok:
+            add(check, ok, message, fix)
+        else:
+            recommend(check+': '+fix)
     add('paseo installed', True)
     code, out, err = probe(['paseo', 'status', '--json'])
     status = parse_line(out)
     running = code == 0 and status.get('localDaemon') == 'running'
-    add('paseo daemon', running, fix=(err+'; ' if 'did not answer' in err else '')+'open Paseo and start its daemon')
+    paseo_check('paseo daemon', running, fix=(err+'; ' if 'did not answer' in err else '')+'open Paseo and start its daemon')
     if running:
         providers = status.get('providers', [])
         if not isinstance(providers, list):
@@ -165,7 +178,7 @@ def setup_checks(kit, homes, drift):
         fields = line.split()
         if len(fields) >= 3 and fields[1:3] == ['running', 'yes'] and (fields[0] == 'routing-kit-pill' or any('paseo-pill' in v or 'limits-pill' in v for v in fields[3:])):
             pill = True
-    add('paseo pill', code == 0 and (pill or not profile.get('paseo')), 'on' if pill else 'off',
+    paseo_check('paseo pill', code == 0 and (pill or not profile.get('paseo')), 'on' if pill else 'off',
         (err+'; ' if 'did not answer' in err else '')+'paseo plugin install https://github.com/Jakobuus/claude-routing-kit.git --path paseo-pill')
     return rows
 
@@ -194,8 +207,8 @@ def main():
             cli = 'agy' if agent == 'gemini' else agent
             if not shutil.which(cli):
                 add('installed', agent+' not installed; install '+cli)
-        if profile.get('codex_build_transport') == 'paseo' and not paseo_installed():
-            add('paseo', 'Paseo chosen but not installed; see START-HERE step 5')
+        if (profile.get('codex_build_transport') == 'paseo' or profile.get('paseo') is True) and not shutil.which('paseo'):
+            add('paseo', 'Paseo chosen; put the paseo command on PATH; see START-HERE step 5')
     sync = load(kit/'sync-state.json')
     for name, entry in sync.get('files', {}).items():
         path = Path(name)

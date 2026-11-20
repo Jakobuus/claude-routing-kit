@@ -18,11 +18,12 @@ The kit lives at https://github.com/Jakobuus/claude-routing-kit.
 
 ## Step 1: Ask which agent they mainly work in
 
-This is the first question, and the person decides. Ask exactly:
+This is the first question, and the person decides. In the same message, first list what each
+choice gets (below), then ask exactly:
 
 "Which agent do you mainly work in: Claude Code, Codex, or Gemini (Antigravity)?"
 
-Remember the answer as **main agent**. Tell them plainly what their choice gets:
+Remember the answer as **main agent**. What each choice gets:
 
 - **Claude Code.** The full kit, as a plugin. The rules and the routing table load by themselves
   at the start of every session. It also adds its skills, the optional status line that tracks

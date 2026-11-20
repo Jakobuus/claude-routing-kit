@@ -124,6 +124,13 @@ rules.write_text('<!-- routing-kit:rules:start -->\nManaged\n<!-- routing-kit:ru
 write(codex/'hooks.json',{'hooks':{}}); r=run('--setup'); check('fix   hooks' in r.stdout,'hook drift detected'); write(codex/'hooks.json',hooks)
 (kit/'sync-state.json').unlink(); r=run('--setup'); check(all('fix   '+name in r.stdout for name in ('rules','skills','hooks')),'missing sync state needs sync'); write(kit/'sync-state.json',sync)
 (codex/'config.toml').write_text(''); r=run('--setup'); check('fix   codex hooks trusted' in r.stdout,'untrusted hooks detected')
+# Codex hooks installed but Codex not routed: their trust is still checked (a failed selftest removes it).
+write(kit/'profile.json',dict(profile,codex='none')); r=run('--setup'); check('fix   codex hooks trusted' in r.stdout,'untrusted hooks checked without Codex routed')
+(codex/'config.toml').write_text(codex_trust.block(list(trust.items()))); r=run('--setup'); check('ok    codex hooks trusted' in r.stdout,'trusted hooks ok without Codex routed'); reset()
+# No agent available in Paseo: a recommendation, never an ok line that reads like a problem, never exit 1.
+(bins/'paseo').write_text(script.replace('"available":true','"available":false')); (bins/'paseo').chmod(0o755)
+r=run('--setup'); check(r.returncode==0 and 'recommended: Paseo lists none of your agents' in r.stdout and 'ok    paseo providers' not in r.stdout,'no Paseo providers is a recommendation')
+(bins/'paseo').write_text(script)
 print('PASS %d / FAIL %d'%(passed,failed))
 sys.exit(bool(failed))
 PY

@@ -1,4 +1,7 @@
-<img width="1254" height="1254" alt="image" src="https://github.com/user-attachments/assets/0f647fa8-0945-48f2-aa10-0f3a30519299" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/header-dark.png">
+  <img src="docs/header-light.png" alt="routing-kit: one lead agent reads a routing table and sends each job to the right model, balancing plan usage" width="100%">
+</picture>
 # routing-kit
 
 Decides which AI model does which job, by a field guide of the current models. It installs for
@@ -163,6 +166,13 @@ readable retention time is never pruned.
 
 Blocking hook guards get 10 seconds each. Lines in `hook-errors.log` include timestamps.
 The **Exploration, big reads, web research** row lists available research models.
+
+## What is new in 0.4.2
+
+- **MIT license.** See [LICENSE](LICENSE).
+- **Setup check, two clearer lines.** `kit-doctor --setup` checks that Codex trusts the kit's hooks
+  whenever they are installed, even before Codex is in your routing table, and an empty Paseo agent
+  list is shown as a recommendation instead of an `ok` line that reads like a problem.
 
 ## What is new in 0.4.1
 
@@ -368,3 +378,7 @@ don't have the pill. [START-HERE.md](START-HERE.md) has the details, including h
 Kimi and GLM keys.
 
 The kit’s rules block is deliberately short; the `delegating` skill holds the build commands.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

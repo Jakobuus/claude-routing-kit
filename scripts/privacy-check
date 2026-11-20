@@ -21,8 +21,10 @@ if [ -z "$PY3" ]; then
 fi
 
 "$PY3" - "$target" "${ROUTING_KIT_PRIVATE_LIST:-$HOME/.config/routing-kit-dev/banned.txt}" "$PATTERNS_DIR" <<'PYEOF'
+import io
 import os
 import sys
+import zlib
 
 target = sys.argv[1]
 private_list_path = sys.argv[2]
@@ -63,28 +65,91 @@ def iter_files(root):
                 continue
             yield os.path.join(dirpath, fn)
 
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+def png_without_pixels(data):
+    """The bytes of a fully valid PNG with its compressed pixel data (IDAT payloads) blanked, plus the
+    decompressed pixels and the decompressed text of zTXt/iTXt chunks. Compressed pixel data is noise that can look like an email. None when
+    anything is off (bad length or CRC, data after IEND, pixel data that is not one clean zlib stream):
+    the caller then scans every byte, as for any other file."""
+    if not data.startswith(PNG_SIGNATURE):
+        return None
+    out, extra, pixels, i, ended = bytearray(data[:8]), [], [], 8, False
+    while i < len(data):
+        if ended or i + 12 > len(data):
+            return None
+        size = int.from_bytes(data[i:i + 4], "big")
+        kind, body = data[i + 4:i + 8], data[i + 8:i + 8 + size]
+        if len(body) != size or i + 12 + size > len(data):
+            return None
+        if int.from_bytes(data[i + 8 + size:i + 12 + size], "big") != zlib.crc32(kind + body):
+            return None
+        if kind == b"IDAT":
+            pixels.append(body)
+            out += data[i:i + 8] + b"\n" * size + data[i + 8 + size:i + 12 + size]
+        else:
+            if kind == b"IEND":
+                if size:
+                    return None
+                ended = True
+            out += data[i:i + 12 + size]
+            compressed = None
+            if kind == b"zTXt" and b"\0" in body:
+                compressed = body.split(b"\0", 1)[1][1:]
+            elif kind == b"iTXt" and body.count(b"\0") >= 1:
+                key, rest = body.split(b"\0", 1)
+                if len(rest) >= 2 and rest[0] == 1:
+                    parts = rest[2:].split(b"\0", 2)
+                    if len(parts) == 3:
+                        compressed = parts[2]
+            if compressed is not None:
+                try:
+                    extra.append(zlib.decompress(compressed))
+                except zlib.error:
+                    pass  # the raw bytes are still scanned
+        i += 12 + size
+    if not ended:
+        return None
+    stream = zlib.decompressobj()
+    try:
+        raw = stream.decompress(b"".join(pixels))
+    except zlib.error:
+        return None
+    if not stream.eof or stream.unused_data:
+        return None
+    # The decompressed pixels are scanned: text stored uncompressed in the pixel stream shows up there.
+    return bytes(out) + b"\n" + raw + b"\n" + b"\n".join(extra)
+
+def lines_of(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    blanked = png_without_pixels(data)
+    if blanked is not None:
+        data = blanked
+    # Same line splitting as reading the file in text mode (universal newlines).
+    return io.StringIO(data.decode("utf-8", errors="ignore"), newline=None).readlines()
+
 for path in iter_files(target):
     try:
-        with open(path, "r", errors="ignore") as f:
-            for lineno, line in enumerate(f, start=1):
-                # npm copies registry deprecation notices (third-party text, often
-                # with a maintainer's contact) into package-lock.json.
-                npm_notice = (os.path.basename(path) == "package-lock.json"
-                              and line.lstrip().startswith('"deprecated":'))
-                for name, pattern in GENERIC:
-                    if npm_notice and name == "email":
+        for lineno, line in enumerate(lines_of(path), start=1):
+            # npm copies registry deprecation notices (third-party text, often
+            # with a maintainer's contact) into package-lock.json.
+            npm_notice = (os.path.basename(path) == "package-lock.json"
+                          and line.lstrip().startswith('"deprecated":'))
+            for name, pattern in GENERIC:
+                if npm_notice and name == "email":
+                    continue
+                for m in pattern.finditer(line):
+                    if is_allowed(line, m.start(), m.end(), m.group(0)):
                         continue
-                    for m in pattern.finditer(line):
-                        if is_allowed(line, m.start(), m.end(), m.group(0)):
-                            continue
-                        hits.append("%s:%d: %s" % (path, lineno, name))
-                if private_terms:
-                    lowered = line.lower()
-                    for allowed in private_allows:
-                        lowered = lowered.replace(allowed, " ")
-                    for term in private_terms:
-                        if term in lowered:
-                            hits.append("%s:%d: private-list" % (path, lineno))
+                    hits.append("%s:%d: %s" % (path, lineno, name))
+            if private_terms:
+                lowered = line.lower()
+                for allowed in private_allows:
+                    lowered = lowered.replace(allowed, " ")
+                for term in private_terms:
+                    if term in lowered:
+                        hits.append("%s:%d: private-list" % (path, lineno))
     except (IsADirectoryError, OSError):
         continue
 

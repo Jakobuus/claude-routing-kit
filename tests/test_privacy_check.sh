@@ -71,5 +71,49 @@ dpc=$(mktmp); mkdir -p "$dpc/lib/__pycache__"
 printf 'someone''@example.org\n' > "$dpc/lib/__pycache__/x.cpython-312.pyc"
 assert_exit 0 "__pycache__ is skipped" -- "$PC" "$dpc"
 
+# PNG: pixel data of a fully valid PNG is skipped (compressed noise can look like an email); everything
+# else is scanned, and any malformed PNG is scanned byte for byte like any other file.
+root=$(cd "$(dirname "$0")/.." && pwd -P)
+dp=$(mktmp); cp "$root/docs/header-light.png" "$root/docs/header-dark.png" "$dp/"
+assert_exit 0 "README header PNGs pass (their pixel data once matched the email pattern)" -- "$PC" "$dp"
+assert_exit 0 "README header PNGs pass the private list" -- env ROUTING_KIT_PRIVATE_LIST="$p/banned.txt" "$PC" "$dp"
+rm "$dp"/*.png
+mkpng() { # FILE CASE TEXT
+  python3 - "$@" <<'PY'
+import struct, sys, zlib
+path, case, text = sys.argv[1], sys.argv[2], sys.argv[3].encode()
+def chunk(k, body, length=None):
+    return struct.pack('>I', len(body) if length is None else length) + k + body + struct.pack('>I', zlib.crc32(k + body))
+pix = chunk(b'IDAT', zlib.compress(b'\0\0'))
+head = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 0, 0, 0, 0))
+end = chunk(b'IEND', b'')
+c = {
+ 'tEXt': lambda: head + chunk(b'tEXt', b'Comment\0' + text) + pix + end,
+ 'zTXt': lambda: head + chunk(b'zTXt', b'Comment\0\0' + zlib.compress(text)) + pix + end,
+ 'zTXt-suffix': lambda: head + chunk(b'zTXt', b'Comment\0\0' + zlib.compress(b'ok') + text) + pix + end,
+ 'iTXt': lambda: head + chunk(b'iTXt', b'Comment\0\0\0\0\0' + text) + pix + end,
+ 'iTXt-z': lambda: head + chunk(b'iTXt', b'Comment\0\1\0\0\0' + zlib.compress(text)) + pix + end,
+ 'type': lambda: head + chunk(text[:4], b'x') + pix + end,
+ 'trailer': lambda: head + pix + end + text,
+ 'iend-body': lambda: head + pix + chunk(b'IEND', text),
+ 'fake-idat': lambda: head + chunk(b'IDAT', text) + end,
+ 'stored': lambda: b'\x89PNG\r\n\x1a\n' + chunk(b'IDAT', zlib.compress(text, 0)) + end,
+ 'oversized': lambda: head + chunk(b'IDAT', zlib.compress(b'\0\0'), length=10**6) + chunk(b'tEXt', b'C\0' + text) + end,
+}[case]
+open(path, 'wb').write(c())
+PY
+}
+mkpng "$dp/ok.png" tEXt "plain words"
+assert_exit 0 "clean valid PNG passes" -- "$PC" "$dp"; rm "$dp/ok.png"
+for c in tEXt zTXt zTXt-suffix iTXt iTXt-z trailer iend-body fake-idat oversized stored; do
+  mkpng "$dp/x.png" "$c" "mail someone""@example.org now"
+  assert_exit 1 "PNG $c: email caught" -- "$PC" "$dp"; rm "$dp/x.png"
+done
+pu=$(mktmp); printf 'josé\nzanz\n' > "$pu/banned.txt"
+mkpng "$dp/u.png" iTXt "by José"
+assert_exit 1 "PNG iTXt: UTF-8 private name caught" -- env ROUTING_KIT_PRIVATE_LIST="$pu/banned.txt" "$PC" "$dp"; rm "$dp/u.png"
+mkpng "$dp/t.png" type "zanZ"
+assert_exit 1 "PNG chunk type holding a private term caught" -- env ROUTING_KIT_PRIVATE_LIST="$pu/banned.txt" "$PC" "$dp"; rm "$dp/t.png"
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

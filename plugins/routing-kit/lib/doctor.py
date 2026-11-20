@@ -125,7 +125,8 @@ def setup_checks(kit, homes, drift):
                              ('hooks', 'hooks', ('hook_drift', 'hook_timeout'))):
         ok = bool(sync.get(key)) and not any(f['check'] in kinds for f in drift)
         add(name, ok, fix='run kit-sync '+name)
-    if 'codex' in agents:
+    # kit-sync installs the Codex hooks even when Codex is not routed yet, so check their trust whenever they are there.
+    if 'codex' in agents or any(e.get('agent') == 'codex' for e in sync.get('hooks', {}).values() if isinstance(e, dict)):
         import codex_trust
         wanted = {}
         for name, entry in sync.get('hooks', {}).items():
@@ -167,7 +168,10 @@ def setup_checks(kit, homes, drift):
         if not isinstance(providers, list):
             providers = []
         available = [a for a in agents if any(isinstance(p, dict) and p.get('provider') in (a, 'agy' if a == 'gemini' else a) and p.get('available') is True for p in providers)]
-        add('paseo providers', True, ', '.join(available) if available else 'none of the configured agents available')
+        if available:
+            add('paseo providers', True, ', '.join(available))
+        else:
+            recommend('Paseo lists none of your agents yet; add them in Paseo to run builds there')
     transport = profile.get('codex_build_transport', 'direct')
     add('codex_build_transport', True, transport)
     if transport == 'direct':

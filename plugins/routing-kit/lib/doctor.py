@@ -29,9 +29,151 @@ def size(path):
     return path.stat().st_size if path.is_file() else 0
 
 
+def used_agents(profile):
+    main = profile.get('main_agent')
+    return [name for name in ('claude', 'codex', 'gemini', 'jules')
+            if main == name or (name == 'claude' and profile.get('claude_plan') not in (None, 'none'))
+            or (name in ('codex', 'gemini') and profile.get(name) not in (None, 'none'))
+            or (name == 'jules' and profile.get(name) is True)]
+
+
+def valid_profile(profile, require_main=False):
+    """Cheap file-only check for session start; `kit-profile validate` does the full check in --setup."""
+    main = profile.get('main_agent', None if require_main else 'claude')
+    return profile.get('version') == 1 and main in ('claude', 'codex', 'gemini')
+
+
+def paseo_installed():
+    import sys
+    return bool(shutil.which('paseo') or (sys.platform == 'darwin' and Path('/Applications/Paseo.app').is_dir()))
+
+
+def probe(command):
+    """Bound a read-only probe, including children inheriting its output pipes."""
+    import signal
+    try:
+        proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, errors='replace', start_new_session=True)
+    except OSError:
+        return 1, '', 'could not run command'
+    try:
+        out, err = proc.communicate(timeout=10)
+        return proc.returncode, out, err
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+        return 1, '', 'did not answer in 10 s'
+
+
+def setup_checks(kit, homes, drift):
+    root = Path(__file__).resolve().parent.parent
+    profile = load(kit/'profile.json')
+    rows = []
+    def add(check, ok, message='', fix=''):
+        rows.append({'check': check, 'status': 'ok' if ok else 'fix',
+                     'message': check + (': '+message if ok and message else ': '+fix if not ok else '')})
+    def recommend(message):
+        rows.append({'check': 'paseo', 'status': 'recommended', 'message': message})
+    code, _, err = probe([str(root/'bin/kit-profile'), 'validate'])
+    add('profile', code == 0 and valid_profile(profile, require_main=True), fix=(err if 'did not answer' in err else 'run START-HERE.md to set a valid profile and main_agent'))
+    agents = used_agents(profile)
+    for agent in agents:
+        cli = 'agy' if agent == 'gemini' else agent
+        if not shutil.which(cli):
+            add(agent+' installed', False, fix='install '+cli+'; see START-HERE.md')
+            continue
+        if agent == 'jules':
+            # Jules has no documented offline-cheap sign-in or version probe.
+            add('jules installed', True)
+            continue
+        code, out, err = probe([cli, '--version'])
+        add(agent+' installed', code == 0, ' '.join(out.split()),
+            (err if 'did not answer' in err else 'check '+cli+' --version'))
+        if 'did not answer' in err:
+            continue
+        command = {'claude': [cli, 'auth', 'status'], 'codex': [cli, 'login', 'status'],
+                   'gemini': [cli, 'models']}[agent]
+        code, out, err = probe(command)
+        signed = code == 0
+        if agent == 'claude':
+            signed = signed and parse_line(out).get('loggedIn') is True
+        elif agent == 'gemini':
+            signed = signed and any(re.match(r'^gemini-[a-z0-9.-]+(?:\s|$)', line.strip()) for line in out.splitlines())
+        login = {'claude': 'claude auth login', 'codex': 'codex login', 'gemini': 'agy (complete sign-in)'}[agent]
+        add(agent+' signed in', signed, fix=(err+'; ' if 'did not answer' in err else '')+login)
+    models = load(root/'rules/models.json')
+    for lane in ('codex', 'gemini'):
+        if lane not in agents:
+            continue
+        code, out, err = probe([str(root/'bin/kit-models-available'), lane])
+        if code == 4:
+            add('models '+lane, True, 'list not known yet')
+        elif code:
+            add('models '+lane, False, fix=(err if 'did not answer' in err else 'run kit-models-available '+lane))
+        else:
+            routed = {v for k, v in models.get(lane, {}).items() if k not in ('base_url', 'host')}
+            missing = sorted(routed - set(out.splitlines()))
+            add('models '+lane, bool(routed) and not missing,
+                fix=('unavailable: '+', '.join(missing)+'; update the routing table or account model list') if missing else 'restore rules/models.json')
+    sync = load(kit/'sync-state.json')
+    for name, key, kinds in (('rules', 'files', ('edited_by_hand',)), ('skills', 'links', ('skill_missing',)),
+                             ('hooks', 'hooks', ('hook_drift', 'hook_timeout'))):
+        ok = key in sync and not any(f['check'] in kinds for f in drift)
+        add(name, ok, fix='run kit-sync '+name)
+    if 'codex' in agents:
+        import codex_trust
+        wanted = {}
+        for name, entry in sync.get('hooks', {}).items():
+            if entry.get('agent') == 'codex':
+                wanted.update(codex_trust.entries_for(name, load(Path(name)), set(entry.get('commands', []))))
+        cfg = homes['codex']/'config.toml'
+        text = cfg.read_text() if cfg.is_file() else ''
+        # Compare complete tables, so a hash in a comment or another hook cannot grant trust.
+        tables = dict(re.findall(r'^\[hooks\.state\.("(?:[^"\\]|\\.)*")\]\s*\n(.*?)(?=^\[|\Z)', text, re.M|re.S))
+        trusted = bool(wanted) and all(re.search(r'^\s*trusted_hash\s*=\s*'+re.escape(json.dumps(digest))+r'\s*(?:#.*)?$',
+                         tables.get(json.dumps(key, ensure_ascii=False), ''), re.M) for key, digest in wanted.items())
+        add('codex hooks trusted', trusted, fix='run kit-sync hooks')
+    installed = paseo_installed()
+    chosen = profile.get('codex_build_transport') == 'paseo' or profile.get('paseo') is True
+    if not installed:
+        if chosen:
+            add('paseo installed', False, fix='install Paseo; see START-HERE step 5')
+        add('codex_build_transport', True, profile.get('codex_build_transport', 'direct'))
+        recommend('Paseo lets you watch and stop builds from the app or your phone, keeps builds running, and shows your usage; see START-HERE step 5')
+        return rows
+    add('paseo installed', True)
+    code, out, err = probe(['paseo', 'status', '--json'])
+    status = parse_line(out)
+    running = code == 0 and status.get('localDaemon') == 'running'
+    add('paseo daemon', running, fix=(err+'; ' if 'did not answer' in err else '')+'open Paseo and start its daemon')
+    if running:
+        providers = status.get('providers', [])
+        if not isinstance(providers, list):
+            providers = []
+        available = [a for a in agents if any(isinstance(p, dict) and p.get('provider') in (a, 'agy' if a == 'gemini' else a) and p.get('available') is True for p in providers)]
+        add('paseo providers', True, ', '.join(available) if available else 'none of the configured agents available')
+    transport = profile.get('codex_build_transport', 'direct')
+    add('codex_build_transport', True, transport)
+    if transport == 'direct':
+        recommend('Use Paseo for builds: kit-profile set codex_build_transport paseo')
+    code, out, err = probe(['paseo', 'plugin', 'ls'])
+    pill = False
+    for line in out.splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[1:3] == ['running', 'yes'] and (fields[0] == 'routing-kit-pill' or any('paseo-pill' in v or 'limits-pill' in v for v in fields[3:])):
+            pill = True
+    add('paseo pill', code == 0 and (pill or not profile.get('paseo')), 'on' if pill else 'off',
+        (err+'; ' if 'did not answer' in err else '')+'paseo plugin install https://github.com/Jakobuus/claude-routing-kit.git --path paseo-pill')
+    return rows
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--fast', action='store_true')
+    p.add_argument('--setup', action='store_true')
     p.add_argument('--json', action='store_true')
     p.add_argument('--cost')
     for agent in ('claude', 'codex', 'gemini'):
@@ -44,6 +186,16 @@ def main():
     findings = []
     def add(check, message):
         findings.append({'check':check, 'message':message})
+    if a.fast:
+        profile = load(kit/'profile.json')
+        if not valid_profile(profile):
+            add('profile', 'profile missing or invalid; run START-HERE.md')
+        for agent in used_agents(profile):
+            cli = 'agy' if agent == 'gemini' else agent
+            if not shutil.which(cli):
+                add('installed', agent+' not installed; install '+cli)
+        if profile.get('codex_build_transport') == 'paseo' and not paseo_installed():
+            add('paseo', 'Paseo chosen but not installed; see START-HERE step 5')
     sync = load(kit/'sync-state.json')
     for name, entry in sync.get('files', {}).items():
         path = Path(name)
@@ -82,7 +234,7 @@ def main():
     previous = load(kit/'doctor-state.json').get('hook_errors',0)
     if count > previous:
         add('hook_errors','routing kit: hooks had %d errors' % (count-previous))
-    if count != previous:
+    if count != previous and not a.setup:
         kit.mkdir(parents=True,exist_ok=True)
         (kit/'doctor-state.json').write_text(json.dumps({'hook_errors':count})+'\n')
     if not a.fast:
@@ -133,6 +285,16 @@ def main():
                         except OSError:
                             pass
             add('retained', 'retained build copies: %d, %.1f MB (kit-retained list; kit-retained prune --older-than DAYS)' % (len(copies), total/1e6))
+    if a.setup:
+        rows = setup_checks(kit, homes, findings)
+        failures = sum(row['status'] == 'fix' for row in rows)
+        if a.json:
+            print(json.dumps(rows))
+        else:
+            for row in rows:
+                print(('recommended: ' if row['status'] == 'recommended' else row['status'].ljust(6)) + row['message'])
+            print('setup: '+(str(failures)+' to fix' if failures else 'all ok'))
+        return 1 if failures else 0
     if a.cost and not a.fast:
         commands = [('claude',['claude','-p','--output-format','json','--model','claude-haiku-5-5','reply ok']),('codex',['codex','exec','--json','--skip-git-repo-check','-m','gpt-6-luna','reply ok']),('gemini',['agy','--output-format','json','--model','gemini-4-hydrogen-low','-p','reply ok'])]
         for agent, command in commands:
@@ -169,6 +331,8 @@ def main():
 
 if __name__ == '__main__':
     try:
-        main()
-    except (Exception, SystemExit) as error:
+        status = main()
+    except Exception as error:
         print('kit-doctor: '+ ' '.join(str(error).splitlines()))
+        status = 1
+    raise SystemExit(status or 0)

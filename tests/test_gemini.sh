@@ -21,11 +21,9 @@ assert_exit 0 'Gemini profile validates' -- env ROUTING_KIT_HOME="$home" "$KP" v
 assert_exit 2 'Gemini profile rejects invalid plan' -- env ROUTING_KIT_HOME="$home" "$KP" set gemini plus
 rows=$(env CODEX_HOME="$home/no-codex" ROUTING_KIT_HOME="$home" "$RT")
 assert_contains "$rows" 'Gemini gemini-4-argon-high' 'Gemini build row'
-assert_contains "$rows" 'Gemini gemini-4-hydrogen-medium' 'Gemini bulk row'
-assert_contains "$(printf '%s\n' "$rows" | grep '| Read-only lookups |')" 'Gemini gemini-4-hydrogen-low' 'Gemini hydrogen in lookup row'
-assert_contains "$(printf '%s\n' "$rows" | grep '| Web research |')" 'Gemini gemini-4-hydrogen-high' 'Gemini hydrogen in research row'
-assert_contains "$rows" 'Gemini work → Claude opus' 'Gemini cross-company review'
-assert_contains "$rows" "Argon's weekly pool is small on Pro" 'Argon pool note'
+assert_contains "$(printf '%s\n' "$rows" | grep '| Lookups, bulk edits, data entry |')" 'Gemini gemini-4-hydrogen-high' 'Gemini hydrogen in lookup row'
+assert_contains "$(printf '%s\n' "$rows" | grep '| Exploration, big reads, web research |')" 'Gemini gemini-4-hydrogen-high' 'Gemini hydrogen in research row'
+assert_contains "$(printf '%s\n' "$rows" | grep '| Review |')" 'Gemini gemini-4-argon-high' 'Gemini may review'
 fixture=$(mktmp)/quota.json
 cat > "$fixture" <<'JSON'
 {"command":{"data":{"groups":[{"buckets":[{"id":"3p-weekly","window":"weekly","remaining_fraction":0.8,"reset_time":"2099-01-01T00:00:00Z"},{"id":"gemini-argon-wtu-weekly","window":"weekly","remaining_fraction":0.7,"reset_time":"2099-01-01T00:00:00Z"},{"id":"gemini-5h","window":"5h","remaining_fraction":0.9,"reset_time":"2099-01-01T00:00:00Z"},{"id":"3p-5h","window":"5h","remaining_fraction":0.6,"reset_time":"2099-01-01T00:00:00Z"},{"id":"gemini-weekly","window":"weekly","remaining_fraction":0.5,"reset_time":"2099-01-01T00:00:00Z"}]}]}}}

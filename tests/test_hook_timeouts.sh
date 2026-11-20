@@ -25,6 +25,13 @@ with tempfile.TemporaryDirectory() as d:
     (p/'registry.json').write_text(json.dumps({'PreToolUse':[registry['PreToolUse'][1]]}))
     out=subprocess.run(command,input=payload,text=True,capture_output=True,env=env)
     assert 'slow' in out.stdout, out
+    # The delegation guard denies too: a stalled Mac must not let it time out open at 2 s.
+    assert registry['PreToolUse'][2]['check']=='delegation'
+    assert 2 < registry['PreToolUse'][2]['timeout_s'] <= 10
+    (p/'delegation.py').write_text((p/'guard_destructive.py').read_text())
+    (p/'registry.json').write_text(json.dumps({'PreToolUse':[registry['PreToolUse'][2]]}))
+    out=subprocess.run(command,input=payload,text=True,capture_output=True,env=env)
+    assert 'slow' in out.stdout, out
     (p/'registry.json').write_text(json.dumps({'PreToolUse':[{'path':'finish.py','timeout':2}]}))
     subprocess.run(command,input=payload,text=True,capture_output=True,env=env,check=True)
     log=(p/'hook-errors.log').read_text()
@@ -35,5 +42,5 @@ with tempfile.TemporaryDirectory() as d:
     (p/'private/media.json').write_text('{}')
     media_match.private_jobs(p)
     assert re.match(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ ',(p/'hook-errors.log').read_text().splitlines()[-1])
-print('PASS 5 / FAIL 0')
+print('PASS 6 / FAIL 0')
 PY

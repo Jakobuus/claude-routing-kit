@@ -12,6 +12,9 @@ concurrency:
 
 jobs:
   test-macos:
+    # macOS minutes count 10x on private repos: the private staging repo skips this job and the release
+    # run proves macOS with a local bare-PATH tests/run instead. Public repos run it for free.
+    if: ${{ !github.event.repository.private }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

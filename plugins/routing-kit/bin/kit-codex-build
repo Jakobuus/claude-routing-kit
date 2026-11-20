@@ -99,6 +99,16 @@ done
 
 [ "$TIMEOUT_SET" = 0 ] || [ "$PASEO" = 1 ] || usage
 
+# KIT_CODEX_CONTINUES: how many times a build that stopped early is told to go on (default 3; 0 = off).
+KIT_CODEX_CONTINUES_N=${KIT_CODEX_CONTINUES:-3}
+case "$KIT_CODEX_CONTINUES_N" in ""|*[!0-9]*) kit_die 2 "KIT_CODEX_CONTINUES must be a whole number (0 = off)" ;; esac
+# codex_continue_check BRIEF FINAL_MESSAGE: 0 (reason on stdout) when the work is clearly not finished.
+codex_continue_check() {
+  [ "$KIT_CODEX_CONTINUES_N" -gt 0 ] || return 1
+  python3 "$BIN_DIR/../lib/codex_continue.py" check "$1" "$2"
+}
+codex_continue_message() { python3 "$BIN_DIR/../lib/codex_continue.py" message; }
+
 [ -n "$REPO" ] && [ -n "$NAME" ] && [ -n "$BRIEF" ] || usage
 
 # A tab, newline or carriage return in --name/--model would forge extra
@@ -166,6 +176,13 @@ on_exit() {
     # Direct mode: the same last line as Paseo, on every exit once a run exists.
     direct_patch=""
     [ ! -f "$run_dir/build.patch" ] || direct_patch=$run_dir/build.patch
+    if [ "$code" -eq 0 ]; then
+      if [ -s "$run_dir/build.patch" ]; then
+        echo "next: git apply --index $run_dir/build.patch, run the checks, have the diff reviewed, commit"
+      else
+        echo "next: no changes were made; read $run_dir/result.md"
+      fi
+    fi
     echo "kit-codex-build: exit=$code patch=$direct_patch result=$run_dir/codex-output.txt"
   fi
   if [ -n "${paseo_started:-}" ]; then
@@ -252,20 +269,49 @@ if command -v caffeinate >/dev/null 2>&1; then
   caffeinate -is -w $$ >/dev/null 2>&1 &
 fi
 run_agent_started "$run_dir" || kit_die 4 'could not mark the run as started'
-set -m
-KIT_ROLE=worker codex exec -m "$MODEL" --dangerously-bypass-approvals-and-sandbox -C "$wt" < "$brief_snapshot" > "$run_dir/codex-output.txt" 2>&1 &
-codex_pid=$!
-wait "$codex_pid"
-codex_code=$?
-# codex has exited; anything it left running in its group goes too, before
-# the diff below is taken.
-{
-  kill -TERM -"$codex_pid" 2>/dev/null
-  sleep 0.3
-  kill -KILL -"$codex_pid" 2>/dev/null
-} 2>/dev/null
-codex_pid=""
-set +m
+# direct_codex ARGS...: one codex call in its own process group; appends to codex-output.txt, sets
+# codex_code. The first call reads the brief on stdin; a continue passes its message as an argument.
+direct_codex() {
+  set -m
+  if [ "$1" = exec ] && [ "${2:-}" != resume ]; then
+    KIT_ROLE=worker codex "$@" < "$brief_snapshot" >> "$run_dir/codex-output.txt" 2>&1 &
+  else
+    ( cd "$wt" && KIT_ROLE=worker exec codex "$@" < /dev/null >> "$run_dir/codex-output.txt" 2>&1 ) &
+  fi
+  codex_pid=$!
+  wait "$codex_pid"
+  codex_code=$?
+  # codex has exited; anything it left running in its group goes too, before
+  # the diff below is taken.
+  {
+    kill -TERM -"$codex_pid" 2>/dev/null
+    sleep 0.3
+    kill -KILL -"$codex_pid" 2>/dev/null
+  } 2>/dev/null
+  codex_pid=""
+  set +m
+}
+: > "$run_dir/codex-output.txt"
+direct_codex exec -m "$MODEL" --dangerously-bypass-approvals-and-sandbox -C "$wt" -o "$run_dir/final-message.txt"
+# An agent that ends its turn with the work clearly unfinished gets a "continue" (see
+# lib/codex_continue.py), up to KIT_CODEX_CONTINUES times. Only a clean end is continued.
+continues=0
+while [ "$codex_code" -eq 0 ] && continue_why=$(codex_continue_check "$brief_snapshot" "$run_dir/final-message.txt"); do
+  if [ "$continues" -ge "$KIT_CODEX_CONTINUES_N" ]; then
+    echo "(stopped early after $continues continues: $continue_why)" >> "$run_dir/codex-output.txt"
+    break
+  fi
+  session_id=$(sed -n 's/^session id: //p' "$run_dir/codex-output.txt" | head -1)
+  if [ -z "$session_id" ]; then
+    echo "(stopped early after $continues continues: $continue_why; no session id to continue)" >> "$run_dir/codex-output.txt"
+    break
+  fi
+  continues=$((continues + 1))
+  rm -f "$run_dir/final-message.txt"
+  echo "(continue $continues: the agent stopped early: $continue_why)" >> "$run_dir/codex-output.txt"
+  direct_codex exec resume "$session_id" -m "$MODEL" --dangerously-bypass-approvals-and-sandbox \
+    -o "$run_dir/final-message.txt" "$(codex_continue_message)"
+done
 
 if [ "$codex_code" -ne 0 ]; then
   cat "$run_dir/codex-output.txt" >&2
@@ -288,5 +334,10 @@ fi
 run_build_patch_fresh "$wt" "$REPO" "$BASE" || exit 4
 cat "$run_dir/build.patch"
 echo "kit-codex-build: run dir: $run_dir"
+if [ -s "$run_dir/build.patch" ]; then
+  echo "next: git apply --index $run_dir/build.patch, run the checks, have the diff reviewed, commit"
+else
+  echo "next: no changes were made; read $run_dir/result.md"
+fi
 echo "kit-codex-build: build patch: $run_dir/build.patch"
 # The last line (exit=0 patch=... result=...) is printed by the exit trap, like on every other exit.

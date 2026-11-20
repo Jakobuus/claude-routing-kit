@@ -213,326 +213,74 @@ if [ "$have_gemini" = yes ]; then
   resolve gemini "$gemini_research"; g_research="$RESOLVED"
 fi
 
-# --- effort text, built from models.json "effort" ---------------------------
-effort_of() { kit_jq -r --arg m "$1" --arg k "$2" '.effort[$m][$k] // empty' "$MODELS_FILE" 2>/dev/null; }
-# "high, never max" / "medium or high, never above"
-eff_range() {
-  u=$(effort_of "$1" use); m=$(effort_of "$1" max)
-  [ -n "$u" ] || return 0
-  if [ -z "$m" ] || [ "$m" = "$u" ]; then echo "$u, never max"; else echo "$u or $m, never above"; fi
-}
-# "medium, high for checks"
-eff_checks() {
-  u=$(effort_of "$1" use); m=$(effort_of "$1" max)
-  [ -n "$u" ] || return 0
-  if [ -z "$m" ] || [ "$m" = "$u" ]; then echo "$u"; else echo "$u, $m for checks"; fi
-}
-# "at high, never low"
-eff_min() {
-  n=$(effort_of "$1" min)
-  [ -n "$n" ] || return 0
-  echo "at $n, never low"
-}
 
-# --- row helpers ------------------------------------------------------------
-LIST=""; NOTE=""
-list_reset() { LIST=""; NOTE=""; }
-add_item() { [ -n "$1" ] && LIST="${LIST:+$LIST · }$1"; return 0; }
-add_note() { [ -n "$1" ] && NOTE="${NOTE:+$NOTE; }$1"; return 0; }
-TRIAL_MODELS=$(kit_jq -r '.trials // {} | keys[]' "$MODELS_FILE")
-row() { # work use notes
-  use_text="$2"
-  for trial_model in $TRIAL_MODELS; do
-    [ "$trial_model" != jules ] || trial_model=Jules
-    use_text=${use_text//"$trial_model"/"$trial_model (trial)"}
-  done
-  use_text=${use_text//" (trial) (the main session)"/" (the main session) (trial)"}
-  if [ -n "$3" ]; then echo "| $1 | $use_text | $3 |"; else echo "| $1 | $use_text | |"; fi
-}
-
-echo "| Work | Use | Notes |"
-echo "|---|---|---|"
-
-if [ "$MAIN" = claude ]; then
-# 1. Plans, architecture, judgment
-list_reset
-use="Claude $c_strong"
-[ -z "$c_top" ] || use="$use (or Fable/Opus main session)"
-add_note "$(eff_checks "$c_strong")"
-if [ -n "$x_strong" ]; then
-  add_note "big plans: ask Codex $x_strong"
-else
-  add_note "strong models plan and review, never code"
-fi
-row "Plans, architecture, judgment" "$use" "$NOTE"
-
-# 2. Hardest builds (Fable, by plan)
-if [ -n "$c_top" ]; then
-  list_reset
-  add_note "$(eff_range "$c_top")"
-  if [ "$claude_plan" = api ]; then
-    add_note "billed per use at API rates (pay per use)"
-  else
-    add_note "needs room in Fable's share and the Claude week"
-  fi
-  row "Hardest builds: long overnight runs, or after a cheaper build failed twice" "Claude $c_top" "$NOTE"
-fi
-
-# 3. Features, fixes, tests
-list_reset
-[ -z "$x_build" ] || add_item "Codex $x_build"
-add_item "Claude $c_build"
-[ -z "$g_build" ] || add_item "Gemini $g_build"
-add_note "$c_build: $(eff_range "$c_build")"
-[ "$have_codex" = yes ] || [ "$have_gemini" = yes ] && add_note "pick by quota"
-[ -z "$g_build" ] || add_note "Argon's weekly pool is small on Pro"
-row "Features, bug fixes, tests" "$LIST" "$NOTE"
-
-# 4. Review: a different company than the builder
-if [ -n "$x_review" ]; then
-  review="Claude work → Codex $x_review"
-  [ -z "$x_strong" ] || review="$review, risky changes → $x_strong"
-elif [ -n "$x_strong" ]; then
-  review="Claude work → Codex $x_strong"
-else
-  review="fresh Claude $c_strong subagent"
-fi
-others=""
-[ "$have_codex" = yes ] && others="Codex"
-if [ "$have_gemini" = yes ]; then
-  others="${others:+$others or }Gemini"
-fi
-[ -z "$others" ] || review="$review; $others work → Claude $c_strong"
-if [ -n "$others" ]; then
-  review_note="the reviewer reads the diff itself, never the builder's report"
-else
-  review_note="no other lane to cross-check against"
-fi
-row "Review" "$review" "$review_note"
-
-# 5. Second opinion
-if [ -n "$x_strong" ]; then
-  second="Codex $x_strong"
-  if [ -n "$c_top" ]; then
-    second="$second; big calls add Claude $c_top"
-  else
-    second="$second; big calls add a fresh Claude $c_strong subagent"
-  fi
-else
-  second="fresh Claude $c_strong subagent"
-fi
-row "Second opinion" "$second" "via ask-advisers"
-
-# 6-7. Long reads and long outputs (Gemini)
-# Exploration goes to the research model only, never the long-read (Argon) model (owner, 17/11: "not argon").
-if [ -n "$g_research" ]; then
-  row "Exploration, big reads" "Gemini $g_research" "read-only facts with file:line, no decisions; another company checks code claims"
-fi
-if [ -n "$g_long" ]; then
-  row "Very long single outputs" "Gemini $g_long" ""
-fi
-
-# 8. Screenshots, UI checks, prose from supplied material (Codex Terra)
-if [ -n "$x_screens" ]; then
-  row "Screenshots, UI checks, prose from supplied material" "Codex $x_screens" "trial: log 5; drop if 2 need fixes"
-fi
-
-# 9. UI building
-row "UI building" "Claude $c_strong" ""
-
-# 10. Read-only lookups
-list_reset
-add_item "Claude $c_lookup"
-[ -z "$x_lookup" ] || add_item "Codex $x_lookup"
-[ -z "$g_lookup" ] || add_item "Gemini $g_lookup"
-add_note "$c_lookup prompts under 100K tokens"
-[ -z "$x_lookup" ] || add_note "Codex $x_lookup $(eff_min "$x_lookup")"
-row "Read-only lookups" "$LIST" "$NOTE"
-
-# 11. Bulk mechanical edits
-list_reset
-[ -z "$x_lookup" ] || add_item "Codex $x_lookup (or a script it writes, run here)"
-[ -z "$g_mid" ] || add_item "Gemini $g_mid"
-add_item "Claude $c_build"
-[ -z "$x_lookup" ] || add_note "Codex $x_lookup $(eff_min "$x_lookup")"
-add_note "only where a script or test checks the result"
-row "Bulk mechanical edits" "$LIST" "$NOTE"
-
-# 12. Web research
-list_reset
-[ -z "$x_build" ] || add_item "Codex $x_build with -c web_search=\"live\""
-[ -z "$g_research" ] || add_item "Gemini $g_research"
-add_item "Claude $c_build"
-row "Web research" "$LIST" ""
-
-# 13. Untrusted input while holding tools that can act
-row "Reading untrusted web pages or email while holding tools that can act" "Claude $c_strong" "never Fable"
-
-else
-# --- Codex or Gemini as the main session ------------------------------------
-# Claude, when the user has it, only helps: it is called as
-# `claude -p --model <id>` in the Review, Second opinion and lookup rows. No
-# Claude build script exists yet, so Claude never builds from here.
+list_reset() { LIST=""; }
+add_item() { [ -z "$1" ] || LIST="${LIST:+$LIST · }$1"; }
+row() { [ -z "$2" ] || echo "| $1 | $2 |"; }
+echo "| Work | Use |"
+echo "|---|---|"
 g_strong=""
-if [ "$have_gemini" = yes ]; then
-  resolve gemini "$gemini_strong"; g_strong="$RESOLVED"
+if [ "$have_gemini" = yes ]; then resolve gemini "$gemini_strong"; g_strong="$RESOLVED"; fi
+m_label=Claude; m_strong="$c_strong"
+if [ "$MAIN" = codex ]; then m_label=Codex; m_strong="${x_strong:-$x_build}"; fi
+if [ "$MAIN" = gemini ]; then
+  resolve gemini "$gemini_strong"; m_label=Gemini; m_strong="${RESOLVED:-$g_build}"
 fi
-if [ "$MAIN" = codex ]; then
-  m_label="Codex"; m_strong="${x_strong:-${x_review:-$x_build}}"
-else
-  m_label="Gemini"; m_strong="${g_strong:-$g_build}"
-fi
-m_session="fresh $m_label${m_strong:+ $m_strong} session"
-claude_helper=""
-[ "$have_claude" = yes ] && claude_helper="Claude $c_strong"
-codex_rev=""
-if [ -n "$x_review" ]; then
-  codex_rev="Codex $x_review"
-  [ -z "$x_strong" ] || codex_rev="$codex_rev, risky changes → $x_strong"
-elif [ -n "$x_strong" ]; then
-  codex_rev="Codex $x_strong"
-fi
-gemini_rev=""
-[ -z "$g_strong" ] || gemini_rev="Gemini $g_strong"
-join_parts() { out=""; for part in "$@"; do [ -n "$part" ] && out="${out:+$out; }$part"; done; printf '%s' "$out"; }
-
-# 1. Plans, architecture, judgment
-list_reset
-use="$m_label${m_strong:+ $m_strong} (the main session)"
-add_note "$(eff_checks "$m_strong")"
-add_note "strong models plan and review, never code"
-row "Plans, architecture, judgment" "$use" "$NOTE"
-
-# 2. Features, fixes, tests
+row "Plans, architecture, judgment" "$m_label $m_strong (or the main session)"
 list_reset
 [ -z "$x_build" ] || add_item "Codex $x_build"
+[ "$MAIN" != claude ] || [ -z "$c_build" ] || add_item "Claude $c_build"
 [ -z "$g_build" ] || add_item "Gemini $g_build"
-[ -n "$LIST" ] || add_item "$m_label $m_strong"
-[ -z "$x_build" ] || [ -z "$g_build" ] || add_note "pick by quota"
-[ -z "$g_build" ] || add_note "Argon's weekly pool is small on Pro"
-[ "$have_claude" = no ] || add_note "no Claude build script exists yet, so Claude does not build"
-row "Features, bug fixes, tests" "$LIST" "$NOTE"
-
-# 3. Review: a different company than the builder
-r_codex=""; r_gemini=""
-if [ "$have_codex" = yes ]; then
-  if [ -n "$claude_helper" ]; then r_codex="Codex work → $claude_helper"
-  elif [ -n "$gemini_rev" ]; then r_codex="Codex work → $gemini_rev"; fi
-fi
-if [ "$have_gemini" = yes ]; then
-  if [ -n "$codex_rev" ]; then r_gemini="Gemini work → $codex_rev"
-  elif [ -n "$claude_helper" ]; then r_gemini="Gemini work → $claude_helper"; fi
-fi
-review=$(join_parts "$r_codex" "$r_gemini")
-if [ -n "$review" ]; then
-  review_note="the reviewer reads the diff itself, never the builder's report"
-  [ -z "$claude_helper" ] || review_note="$review_note; Claude runs as claude -p --model $c_strong"
-else
-  review="$m_session"
-  review_note="no other lane to cross-check against"
-fi
-row "Review" "$review" "$review_note"
-
-# 4. Second opinion: a different company than the main session
-others=""; second=""; big=""
-if [ "$MAIN" = codex ]; then
-  [ -z "$claude_helper" ] || { others="$claude_helper"; }
-  [ -z "$gemini_rev" ] || others="${others:+$others
-}$gemini_rev"
-else
-  [ -z "$x_strong" ] || others="Codex $x_strong"
-  [ -z "$claude_helper" ] || others="${others:+$others
-}$claude_helper"
-fi
-second=$(printf '%s\n' "$others" | sed -n '1p')
-big=$(printf '%s\n' "$others" | sed -n '2p')
-if [ -z "$big" ] && [ -n "$c_top" ]; then big="Claude $c_top"; fi
-if [ -n "$second" ]; then
-  [ -z "$big" ] || second="$second; big calls add $big"
-  so_note="follow the Advisers rules"
-  [ -z "$claude_helper" ] || so_note="$so_note; Claude runs as claude -p --model $c_strong"
-else
-  second="$m_session"
-  so_note="follow the Advisers rules; no other lane to ask"
-fi
-row "Second opinion" "$second" "$so_note"
-
-# 5-6. Long reads and long outputs (Gemini)
-# Exploration goes to the research model only, never the long-read (Argon) model (owner, 17/11: "not argon").
-if [ -n "$g_research" ]; then
-  row "Exploration, big reads" "Gemini $g_research" "read-only facts with file:line, no decisions; another company checks code claims"
-fi
-if [ -n "$g_long" ]; then
-  row "Very long single outputs" "Gemini $g_long" ""
-fi
-
-# 7. Screenshots, UI checks, prose from supplied material (Codex Terra)
-if [ -n "$x_screens" ]; then
-  row "Screenshots, UI checks, prose from supplied material" "Codex $x_screens" "trial: log 5; drop if 2 need fixes"
-fi
-
-# 8. UI building
+row "Features, fixes, tests" "$LIST"
+[ "$MAIN" != claude ] || row "Hardest builds (long unattended, or failed twice)" "${c_top:+Claude $c_top}"
 list_reset
-if [ -n "$x_build" ]; then add_item "Codex $x_build"
-elif [ -n "$g_build" ]; then add_item "Gemini $g_build"
-else add_item "$m_label $m_strong"; fi
-row "UI building" "$LIST" ""
-
-# 9. Read-only lookups
+[ -z "$x_strong" ] || add_item "Codex $x_strong"
+[ -z "$c_strong" ] || add_item "Claude $c_strong"
+[ -z "$g_long" ] || add_item "Gemini $g_long"
+companies=0
+[ "$have_claude" != yes ] || companies=$((companies+1))
+[ "$have_codex" != yes ] || companies=$((companies+1))
+[ "$have_gemini" != yes ] || companies=$((companies+1))
+if [ "$companies" -gt 1 ]; then
+ row Review "a strong model from another company than the builder: $LIST"
+else
+ row Review "a fresh $m_label $m_strong session that did not build it"
+fi
+second=""
+if [ "$MAIN" = claude ]; then
+ if [ -n "$x_strong" ]; then second="Codex $x_strong; big calls add Claude ${c_top:-$c_strong}"; else second="fresh Claude $c_strong subagent"; fi
+elif [ "$MAIN" = codex ]; then
+ [ -z "$c_strong" ] || second="Claude $c_strong (claude -p --model $c_strong)"
+ [ -z "$g_strong" ] || second="${second:+$second; big calls add }Gemini $g_strong"
+else
+ [ -z "$x_strong" ] || second="Codex $x_strong"
+ [ -z "$c_strong" ] || second="${second:+$second; big calls add }Claude $c_strong (claude -p --model $c_strong)"
+fi
+row "Second opinion" "${second:-fresh $m_label $m_strong session}"
+list_reset
+[ -z "$g_research" ] || add_item "Gemini $g_research"
+[ -z "$x_build" ] || add_item "Codex $x_build with web search"
+[ "$MAIN" != claude ] || [ -z "$c_build" ] || add_item "Claude $c_build"
+row "Exploration, big reads, web research" "$LIST"
 list_reset
 [ -z "$x_lookup" ] || add_item "Codex $x_lookup"
-[ -z "$g_lookup" ] || add_item "Gemini $g_lookup"
-[ "$have_claude" = no ] || add_item "Claude $c_lookup"
-[ -n "$LIST" ] || add_item "$m_label $m_strong"
-[ "$have_claude" = no ] || add_note "$c_lookup prompts under 100K tokens; run as claude -p --model $c_lookup"
-[ -z "$x_lookup" ] || add_note "Codex $x_lookup $(eff_min "$x_lookup")"
-row "Read-only lookups" "$LIST" "$NOTE"
-
-# 10. Bulk mechanical edits
-list_reset
-[ -z "$x_lookup" ] || add_item "Codex $x_lookup (or a script it writes, run here)"
-[ -z "$g_mid" ] || add_item "Gemini $g_mid"
-[ -n "$LIST" ] || add_item "$m_label $m_strong"
-[ -z "$x_lookup" ] || add_note "Codex $x_lookup $(eff_min "$x_lookup")"
-add_note "only where a script or test checks the result"
-row "Bulk mechanical edits" "$LIST" "$NOTE"
-
-# 11. Web research
-list_reset
-[ -z "$x_build" ] || add_item "Codex $x_build with -c web_search=\"live\""
 [ -z "$g_research" ] || add_item "Gemini $g_research"
-[ -n "$LIST" ] || add_item "$m_label $m_strong"
-row "Web research" "$LIST" ""
-
-# 12. Untrusted input while holding tools that can act
-if [ "$MAIN" = codex ]; then untrusted="Codex ${x_build:-$m_strong}"; else untrusted="Gemini ${g_mid:-${g_build:-$m_strong}}"; fi
-row "Reading untrusted web pages or email while holding tools that can act" "$untrusted" "never the top model"
+if [ -n "$c_lookup" ]; then
+ if [ "$MAIN" = claude ]; then add_item "Claude $c_lookup"; else add_item "Claude $c_lookup (claude -p --model $c_lookup)"; fi
+fi
+row "Lookups, bulk edits, data entry" "$LIST"
+if [ "$MAIN" = claude ]; then ui="Claude $c_strong"; untrusted="$ui"
+elif [ "$MAIN" = codex ]; then ui="Codex ${x_build:-$m_strong}"; untrusted="$ui"
+else ui="Gemini ${g_build:-$m_strong}"; [ -z "$x_build" ] || ui="Codex $x_build"; untrusted="Gemini ${g_mid:-$m_strong}"; fi
+row "UI building" "$ui"
+row "Screenshots, UI checks" "${x_screens:+Codex $x_screens}"
+row "Web pages or email while holding tools that can act" "$untrusted"
+[ "$jules" != true ] || row "Mechanical work with an existing check" Jules
+if [ "$(uname)" = Darwin ]; then
+ list_reset
+ [ "$kimi" != true ] || add_item "locked-build --provider kimi"
+ [ "$glm" != true ] || add_item "locked-build --provider glm"
+ [ -z "$LIST" ] || row "Cheap extra builds" "$LIST (committed code only, nothing private, never as Paseo agents)"
 fi
 
-# 14. Mechanical work with an existing check (Jules)
-if [ "$jules" = "true" ]; then
-  row "Mechanical work with an existing check" "Jules via kit-jules-build" "GitHub repos only; Google shuts Jules down on 31 Dec 2026; move to Gemini"
-fi
-
-# Cheap extra builds (Kimi/GLM) -- macOS-only (the Seatbelt jail): never
-# listed off a Mac, even if a hand-edited profile.json says kimi/glm true
-# (kit-profile itself already refuses to set either true off-Mac).
-if [ "$(uname)" = Darwin ] && { [ "$kimi" = "true" ] || [ "$glm" = "true" ]; }; then
-  use=""
-  if [ "$kimi" = "true" ]; then
-    use="locked-build --provider kimi"
-  fi
-  if [ "$glm" = "true" ]; then
-    if [ -n "$use" ]; then
-      use="$use · locked-build --provider glm"
-    else
-      use="locked-build --provider glm"
-    fi
-  fi
-  echo "| Cheap extra builds | $use | committed code only; never paste private data; never start them as Paseo agents |"
-fi
-
-if [ -n "$NOTES" ]; then
-  echo
-  printf '%s\n' "$NOTES"
-fi
+if [ -n "$NOTES" ]; then printf "\n%s\n" "$NOTES"; fi

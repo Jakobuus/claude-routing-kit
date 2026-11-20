@@ -254,31 +254,6 @@ def command_reason(words, depth):
         return 'Delegation requires an explicit --model.'
     if executable in {'claude', 'paseo'} and any('fable' in model.lower() for model in models):
         return 'Shell delegation must not use a Fable model.'
-    effort_flag = {'claude': '--effort', 'agy': '--effort',
-                   'agy-build': '--effort',
-                   'paseo': '--thinking', 'codex': '-c model_reasoning_effort=…'}.get(executable)
-    if not effort_flag:
-        return  # Build wrappers expose no effort option.
-    if executable == 'codex':
-        values = []
-        for i, arg in enumerate(args):
-            if arg in ('-c', '--config') and i + 1 < len(args):
-                values.append(args[i + 1])
-            elif arg.startswith('--config='):
-                values.append(arg[len('--config='):])
-            elif arg.startswith('-c') and len(arg) > 2:
-                values.append(arg[2:])
-        present = any(re.match(r'^model_reasoning_effort\s*=\s*.+', v) for v in values)
-    else:
-        present = any(
-            (arg == effort_flag and i + 1 < len(args)
-             and bool(args[i + 1]) and not args[i + 1].startswith('-'))
-            or (arg.startswith(effort_flag + '=') and bool(arg[len(effort_flag) + 1:]))
-            for i, arg in enumerate(args))
-    # Models that carry their effort in the name (gemini-4-argon-high) need no separate flag.
-    present = present or any(re.search(r'-(low|medium|high|xhigh|max)$', m) for m in models)
-    if not present:
-        return f'Delegation requires an explicit {effort_flag}.'
 
 
 
@@ -291,9 +266,7 @@ def main():
     if tool.get('kind') == 'agent' and data.get('agent') == 'claude' and tool.get('name') == 'Agent':
         params = tool.get('params') or {}
         kind = (params.get('subagent_type') or 'general-purpose').strip()
-        if kind != 'fork' and not params.get('effort'):
-            reason = 'This Agent call has no `effort`. Pick one on purpose for this task (low = lookups, medium = standard build work, high = tricky work, xhigh/max = only when the task needs it) and re-issue the call.'
-        elif kind in {'general-purpose', 'claude', 'Plan'} and not params.get('model'):
+        if kind in {'general-purpose', 'claude', 'Plan'} and not params.get('model'):
             reason = f"Subagent '{kind}' would silently inherit the main session model. Re-issue this Agent call with an explicit model."
     elif tool.get('kind') == 'shell':
         reason = shell_reason(tool.get('command') or '')

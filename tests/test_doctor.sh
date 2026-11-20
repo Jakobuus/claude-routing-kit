@@ -10,6 +10,12 @@ export ROUTING_KIT_HOME="$(mktmp)"
 claude_home=$(mktmp)
 gemini_home=$(mktmp)
 repos=$(mktmp)
+agentbin=$(mktmp)
+for name in claude codex agy jules paseo; do
+  printf '#!/bin/bash\nexit 0\n' > "$agentbin/$name"
+  chmod +x "$agentbin/$name"
+done
+export PATH="$agentbin:$PATH"
 export DOCTOR_MARKER="$HOME/probed"
 export DOCTOR_COST_FIXTURES="$PWD/tests/fixtures/doctor/cost"
 doctor="$PWD/plugins/routing-kit/bin/kit-doctor"
@@ -21,6 +27,7 @@ clean() {
   kit_python3 - "$claude_home" "$ROUTING_KIT_HOME" <<'PY'
 import sys,pathlib,json,hashlib
 home,kit=map(pathlib.Path,sys.argv[1:])
+(kit/'profile.json').write_text(json.dumps({'version':1,'main_agent':'claude','claude_plan':'pro'}))
 rules=home/'CLAUDE.md'
 rules.write_text('Outside\n<!-- routing-kit:rules:start -->\nManaged\n<!-- routing-kit:rules:end -->\n')
 target=kit/'skill'

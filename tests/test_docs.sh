@@ -35,6 +35,11 @@ for n in 15 100 300; do
   assert_contains "$(cat "$START")" "kit-profile set jules_daily_limit $n" "START-HERE maps a Jules plan to limit $n"
 done
 
+for phrase in 'claude auth status' 'codex login status' 'kit-doctor --setup' 'setup: all ok' 'Would you like to use Paseo?'; do
+  assert_contains "$(cat "$START")" "$phrase" "START-HERE includes $phrase"
+done
+if grep -Fq 'only if `paseo` was found' "$START"; then fail "Paseo must always be offered"; else pass; fi
+
 # START-HERE asks about the two guards and saves them as one setting.
 assert_contains "$(cat "$START")" "Turn on the guard against destructive commands?" "START-HERE asks about the destructive guard"
 assert_contains "$(cat "$START")" "Turn on the guard for owner checkouts?" "START-HERE asks about the owner-checkout guard"

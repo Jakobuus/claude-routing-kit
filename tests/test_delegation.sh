@@ -71,18 +71,14 @@ expect_allow "fork"              "$(ag '{"subagent_type":"fork","prompt":"x"}')"
 expect_allow "Explore"           "$(ag '{"subagent_type":"Explore","effort":"medium","prompt":"x"}')"
 expect_allow "custom pinned def" "$(ag '{"subagent_type":"fresh-reviewer","effort":"medium","prompt":"x"}')"
 expect_allow "plugin agent"      "$(ag '{"subagent_type":"episodic-memory:search-conversations","effort":"medium","prompt":"x"}')"
-expect_deny  "gp model but no effort" "$(ag '{"subagent_type":"general-purpose","model":"sonnet","prompt":"x"}')" "effort"
-expect_deny  "custom def no effort"   "$(ag '{"subagent_type":"fresh-reviewer","prompt":"x"}')" "effort"
-expect_deny  "empty effort"           "$(ag '{"subagent_type":"general-purpose","model":"sonnet","effort":"","prompt":"x"}')" "effort"
+expect_allow  "gp model but no effort" "$(ag '{"subagent_type":"general-purpose","model":"sonnet","prompt":"x"}')"
+expect_allow  "custom def no effort"   "$(ag '{"subagent_type":"fresh-reviewer","prompt":"x"}')"
+expect_allow  "empty effort"           "$(ag '{"subagent_type":"general-purpose","model":"sonnet","effort":"","prompt":"x"}')"
 expect_allow "gp model and effort"    "$(ag '{"subagent_type":"general-purpose","model":"sonnet","effort":"high","prompt":"x"}')"
 expect_allow "explicit fable agent is allowed" "$(ag '{"subagent_type":"general-purpose","model":"fable","effort":"high","prompt":"x"}')"
 expect_allow "not Agent tool (Bash ls)" "$(ev_shell claude Bash 'ls')"
 expect_allow "other tool kind (Write)" "$(kit_jq -n -c '{agent:"claude",event:"PreToolUse",session_id:"s1",cwd:"/tmp",prompt:"",first_in_turn:false,stop_hook_active:false,tool:{kind:"write",name:"Write",command:"",paths:["/tmp/x"],params:{file_path:"/tmp/x"}}}')"
 expect_allow "malformed json" 'not json at all'
-# the effort message keeps the original wording
-run_check "$(ag '{"subagent_type":"general-purpose","model":"sonnet","prompt":"x"}')"
-assert_contains "$OUT" 'has no `effort`' "effort message wording ported"
-
 # ---- Antigravity subagent tiers flash|pro are allowed (no effort/model rules apply) ----
 expect_allow "agy subagent tier flash (model)" "$(ev_agent agy invoke_subagent '{"model":"flash","prompt":"x"}')"
 expect_allow "agy subagent tier pro (model)"   "$(ev_agent agy invoke_subagent '{"model":"pro","prompt":"x"}')"
@@ -95,13 +91,13 @@ for pair in claude:Bash codex:Bash agy:run_command; do
   shc() { ev_shell "$A" "$T" "$1"; }
   expect_deny "paseo missing model" "$(shc 'paseo run x')" "--model"
   expect_deny "paseo fable" "$(shc 'paseo run --model fable --thinking high x')" "fable"
-  expect_deny "paseo missing thinking" "$(shc 'paseo run --model sonnet x')" "--thinking"
+  expect_allow "paseo missing thinking" "$(shc 'paseo run --model sonnet x')"
   expect_allow "paseo explicit" "$(shc 'paseo run --model=sonnet --thinking=high x')"
   expect_allow "paseo help" "$(shc 'paseo run --help')"
   expect_allow "paseo lookup" "$(shc 'which paseo run')"
-  expect_deny "claude missing effort" "$(shc 'claude -p --model sonnet x')" "--effort"
-  expect_deny "agy missing effort" "$(shc 'agy -p --model gemini x')" "--effort"
-  expect_deny "codex missing effort" "$(shc 'codex exec -m sol x')" "model_reasoning_effort"
+  expect_allow "claude missing effort" "$(shc 'claude -p --model sonnet x')"
+  expect_allow "agy missing effort" "$(shc 'agy -p --model gemini x')"
+  expect_allow "codex missing effort" "$(shc 'codex exec -m sol x')"
   expect_allow "codex config equals" "$(shc 'codex exec -m sol --config=model_reasoning_effort=high x')"
   expect_allow "agy effort equals" "$(shc 'agy -p --model gemini --effort=high x')"
   expect_deny  "$A: claude -p without --model" "$(shc 'claude -p "x"')" "--model"
@@ -206,6 +202,6 @@ expect_allow "deeply nested JSON fails open" "$DEEP"
 # The owner's documented agy and agy-build commands carry effort in the model name.
 expect_allow "agy effort in model name" "$(ev_shell claude Bash 'agy --dangerously-skip-permissions --model gemini-4-argon-high --output-format json -p "x"')"
 expect_allow "agy-build effort in model name" "$(ev_shell claude Bash 'agy-build --repo /r --name n --brief /b.md --model gemini-4-hydrogen-medium')"
-expect_deny "agy without effort anywhere" "$(ev_shell claude Bash 'agy --model gemini-4-argon -p x')" effort
+expect_allow "agy without effort anywhere" "$(ev_shell claude Bash 'agy --model gemini-4-argon -p x')"
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

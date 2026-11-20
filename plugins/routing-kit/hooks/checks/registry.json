@@ -45,7 +45,7 @@
     },
     {
       "check": "delegation",
-      "timeout_s": 2
+      "timeout_s": 10
     }
   ],
   "PostToolUse": [

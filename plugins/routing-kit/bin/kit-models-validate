@@ -7,8 +7,12 @@ values are in the enum; every fallback target exists and the fallback graph
 has no cycle; every lane keeps its required roles (strong, build, lookup);
 every routed model is offered by its CLI when kit-models-available knows that
 list (exit 4 there = unknown = skipped). Reads only; never changes a cache.
+Also checks version, required lanes, pricing and calendar dates, paired HTTPS
+endpoints for kimi/glm, and trial run counts and ledger names.
 Python 3.9 stdlib only.
 """
+import datetime
+from urllib.parse import urlsplit
 import json
 import os
 import re
@@ -59,13 +63,67 @@ def validate(data, guide=(), availability=True):
         raise ValueError('table must be an object')
     if set(data) - TOP_KEYS:
         raise ValueError('unknown table key: ' + ', '.join(sorted(set(data) - TOP_KEYS)))
-    if 'checked' in data and not (isinstance(data['checked'], str) and DATE.match(data['checked'])):
+    def date_ok(value):
+        try:
+            return bool(DATE.fullmatch(value)) and bool(datetime.date.fromisoformat(value))
+        except (ValueError, TypeError):
+            return False
+
+    if type(data.get('version')) is not int or data['version'] < 1:
+        raise ValueError('version must be an integer >= 1')
+    for family in AVAILABLE_LANES:
+        if family not in data:
+            raise ValueError('missing lane: ' + family)
+    if 'checked' in data and not date_ok(data['checked']):
         raise ValueError('checked must be a YYYY-MM-DD date')
+    if 'pricing' in data:
+        pricing = data['pricing']
+        if not isinstance(pricing, dict):
+            raise ValueError('pricing must be an object')
+        for model, prices in pricing.items():
+            if not ID.fullmatch(model):
+                raise ValueError('invalid model id in pricing')
+            if not isinstance(prices, dict) or set(prices) != {'price_in_per_mtok', 'price_out_per_mtok'}:
+                raise ValueError('invalid pricing fields for ' + model)
+            for price in prices.values():
+                if price is not None and (type(price) not in (int, float) or not 0 <= price < 1000):
+                    raise ValueError('invalid price for ' + model)
+    if 'pricing' in data or 'pricing_checked' in data:
+        stamp = data.get('pricing_checked')
+        if (not isinstance(stamp, str) or len(stamp) > 300 or
+                '\n' in stamp or '\r' in stamp or not date_ok(stamp[:10])):
+            raise ValueError('pricing_checked must start with a valid date and contain at most 300 characters without newlines')
+    if 'trials' in data:
+        if not isinstance(data['trials'], dict):
+            raise ValueError('trials must be an object')
+        for model, trial in data['trials'].items():
+            if not ID.fullmatch(model):
+                raise ValueError('invalid model id in trials')
+            if (not isinstance(trial, dict) or set(trial) != {'runs', 'ledger'} or
+                    type(trial.get('runs')) is not int or not 1 <= trial['runs'] <= 100 or
+                    not isinstance(trial.get('ledger'), str) or
+                    not re.fullmatch(r'[A-Za-z0-9._-]{1,60}', trial['ledger'])):
+                raise ValueError('invalid trial for ' + model)
     routed = {}
     for family in sorted(LANES & set(data)):
         lane = data[family]
         if not isinstance(lane, dict) or set(lane) - ROLES - LANE_KEYS:
             raise ValueError('invalid lane: ' + family)
+        if LANE_KEYS & set(lane):
+            if family not in {'kimi', 'glm'} or not LANE_KEYS <= set(lane):
+                raise ValueError('invalid endpoint fields in ' + family)
+            url, host = lane['base_url'], lane['host']
+            try:
+                parsed = urlsplit(url) if isinstance(url, str) else None
+                valid = (parsed is not None and url.startswith('https://') and
+                         parsed.hostname and parsed.netloc == parsed.hostname and
+                         parsed.hostname == host and not parsed.query and not parsed.fragment and
+                         '?' not in url and '#' not in url and
+                         not any(c.isspace() or ord(c) < 32 for c in url))
+            except ValueError:
+                valid = False
+            if not valid:
+                raise ValueError('invalid endpoint in ' + family)
         required = {'build'} if family in {'kimi', 'glm'} else {'strong', 'build', 'lookup'}
         missing = required - set(lane)
         if missing:

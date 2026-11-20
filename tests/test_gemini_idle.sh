@@ -24,6 +24,7 @@ for value in 0 -1 1.5 abc ''; do
 assert_exit 2 "reject idle value $value" -- env ROUTING_KIT_HOME="$home" KIT_AGY_IDLE_SECS="$value" "$BIN" --repo "$repo" --name invalid --brief "$brief"
 done
 start=$SECONDS
+assert_contains "$(cat "$BIN")" 'KIT_AGY_IDLE_SECS-1800' 'default idle limit is 30 minutes'
 out=$(env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" KIT_AGY_IDLE_SECS=2 KIT_AGY_CASE=idle "$BIN" --repo "$repo" --name idle --brief "$brief" --timeout 25 2>&1)
 code=$?
 assert_eq 4 "$code" 'idle exits with saved failure'

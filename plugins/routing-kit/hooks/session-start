@@ -7,10 +7,15 @@ set -u
 if [ "${KIT_ROLE:-}" = worker ]; then
   cat <<'WORKER'
 ## You are a worker
+- Your only job is the task in your brief. Rules elsewhere about talking to the owner, status lines,
+  checkpoints, planning, delegating, asking questions or quotas are for the lead session: ignore them here.
+- Nobody answers you while you work. Never end your turn to report progress or to say what you will do
+  next: do it. End your turn only when the work in the brief is done, or when you are truly blocked (say exactly why).
 - Stay inside the task in your brief. Don't refactor code you weren't asked to touch.
 - Run the project's tests (or the check named in the brief) before you finish.
 - Don't commit, push, or change git config.
-- End with three short lists: what you did, what you didn't do, what you couldn't check.
+- Only when everything is done (or you are blocked): end with three short lists: what you did, what you
+  didn't do, what you couldn't check.
 WORKER
   worker_home="${KIT_HOME:-${ROUTING_KIT_HOME:-$HOME/.config/routing-kit}}"
   [ ! -f "$worker_home/private/worker.md" ] || cat "$worker_home/private/worker.md"

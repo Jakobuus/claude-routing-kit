@@ -1,5 +1,6 @@
 #!/bin/bash
 . "$(dirname "$0")/lib.sh"
+assert_absent() { case "$1" in *"$2"*) fail "$3";; *) pass;; esac; }
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 PLUGIN_ROOT="$REPO_ROOT/plugins/routing-kit"
 HOOK="$PLUGIN_ROOT/hooks/session-start"
@@ -31,14 +32,14 @@ mkprofile() {
     "$2" "$3" "$4" "$5" "$6" "$7" > "$1"
 }
 
-# (a) valid profile -> stdout contains "# Rules" and "## Your routing table", exit 0
+# (a) valid profile -> stdout contains "# Routing (routing-kit)" and "## Your routing table", exit 0
 d=$(mktmp)
 mkdir -p "$d/.config/routing-kit"
 mkprofile "$d/.config/routing-kit/profile.json" pro none false false false false
 out=$(env ROUTING_KIT_HOME="$d/.config/routing-kit" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
 code=$?
 assert_eq 0 "$code" "valid profile exits 0"
-assert_contains "$out" "# Rules" "valid profile output has # Rules"
+assert_contains "$out" "# Routing (routing-kit)" "valid profile output has # Rules"
 assert_contains "$out" "## Your routing table" "valid profile output has routing table heading"
 case "$out" in *"## You are a worker"*) fail "default session is a lead";; *) pass;; esac
 lead=$(KIT_ROLE=lead ROUTING_KIT_HOME="$d/.config/routing-kit" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
@@ -46,10 +47,15 @@ assert_eq "$out" "$lead" "explicit lead matches default"
 worker=$(KIT_ROLE=worker "$HOOK")
 expected=$(cat <<'WORKER'
 ## You are a worker
+- Your only job is the task in your brief. Rules elsewhere about talking to the owner, status lines,
+  checkpoints, planning, delegating, asking questions or quotas are for the lead session: ignore them here.
+- Nobody answers you while you work. Never end your turn to report progress or to say what you will do
+  next: do it. End your turn only when the work in the brief is done, or when you are truly blocked (say exactly why).
 - Stay inside the task in your brief. Don't refactor code you weren't asked to touch.
 - Run the project's tests (or the check named in the brief) before you finish.
 - Don't commit, push, or change git config.
-- End with three short lists: what you did, what you didn't do, what you couldn't check.
+- Only when everything is done (or you are blocked): end with three short lists: what you did, what you
+  didn't do, what you couldn't check.
 WORKER
 )
 assert_eq "$expected" "$worker" "worker prints only its section"
@@ -251,14 +257,14 @@ d=$(mktmp)
 mkprofile "$d/profile.json" max5 plus false false false false
 out=$(run_hook "$d")
 case "$out" in *"<!--"*) fail "claude main: filter markers left in the output";; *) pass;; esac
-assert_contains "$out" "**Hardest builds.**" "claude main: Hardest builds rule"
-assert_contains "$out" "**Risky changes get the stronger reviewer.**" "claude main: risky changes rule"
-assert_contains "$out" "**Reviewers read the diff.**" "claude main: reviewers read the diff"
-assert_contains "$out" "**Effort.** Raise the model, not the effort." "claude main: effort rule"
-assert_contains "$out" "**Brief each company's models differently.**" "claude main: brief rule"
-assert_contains "$out" "**Untrusted text.**" "claude main: untrusted rule"
-assert_contains "$out" "**Background workers never run on the top Claude model**" "claude main: background workers rule"
-assert_contains "$out" "every subagent gets \`model\`" "claude main: subagent wording"
+assert_contains "$out" "Hardest builds (long unattended, or failed twice)" "claude main: Hardest builds rule"
+assert_contains "$out" "Risky changes" "claude main: risky changes rule"
+assert_contains "$out" "One review per build, on the diff" "claude main: reviewers read the diff"
+assert_absent "$out" "**Effort.** Raise the model, not the effort." "claude main: effort rule"
+assert_absent "$out" "**Brief each company's models differently.**" "claude main: brief rule"
+assert_absent "$out" "**Untrusted text.**" "claude main: untrusted rule"
+assert_absent "$out" "**Background workers never run on the top Claude model**" "claude main: background workers rule"
+assert_contains "$out" "Name the model on every worker" "claude main: subagent wording"
 
 # Codex-only user: Codex main, no Claude plan, no Gemini.
 d=$(mktmp)
@@ -271,9 +277,9 @@ case "$out" in *subagent*|*Subagent*) fail "codex main: the word subagent appear
 case "$out" in *"claude plugin"*) fail "codex main: claude plugin appears";; *) pass;; esac
 case "$out" in *opus*|*sonnet*|*haiku*|*fable*|*gemini-*|*argon-*|*hydrogen-*|*flash*) fail "codex main: a model of a lane the user lacks appears";; *) pass;; esac
 case "$out" in *"Hardest builds"*|*"Background workers"*) fail "codex main: Claude-only rules appear";; *) pass;; esac
-assert_contains "$out" "**Risky changes get the stronger reviewer.**" "codex main: shared rules present"
+assert_contains "$out" "Risky changes" "codex main: shared rules present"
 assert_contains "$out" "Kit commands live in $PLUGIN_ROOT/bin; call them by full path if they are not on PATH." "codex main: kit commands located by full path"
-assert_contains "$out" "gpt-6-astra (the main session)" "codex main: Plans row"
+assert_contains "$out" "gpt-6-astra (or the main session)" "codex main: Plans row"
 # Stale guide: git pull wording, no claude plugin.
 stale=$(env KIT_GUIDE_TODAY=2099-01-01 ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-codex" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
 assert_contains "$stale" "Update it: git -C " "codex main: stale line says git pull"
@@ -289,8 +295,8 @@ d=$(mktmp)
 printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"pro","jules":false,"kimi":false,"glm":false,"paseo":false,"main_agent":"gemini"}\n' > "$d/profile.json"
 out=$(run_hook "$d")
 case "$out" in *"<!--"*|*subagent*|*"claude plugin"*) fail "gemini main: marker, subagent or claude plugin in output";; *) pass;; esac
-assert_contains "$out" "gemini-4-argon-high (the main session)" "gemini main: Plans row"
-assert_contains "$out" "its builds go through \`kit-gemini-build\`" "gemini main: Gemini lane rules present"
+assert_contains "$out" "gemini-4-argon-high (or the main session)" "gemini main: Plans row"
+assert_contains "$out" "delegating" "gemini main: Gemini lane rules present"
 # Profile with a main agent but no lane: repair line, exit 0.
 printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"none","jules":false,"kimi":false,"glm":false,"paseo":false,"main_agent":"codex"}\n' > "$d/profile.json"
 out=$(run_hook "$d"); code=$?
@@ -317,7 +323,7 @@ assert_eq 1 "$(printf '%s' "$got" | jq '.injectSteps | length')" "adapter emits 
 printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"pro","jules":false,"kimi":false,"glm":false,"paseo":false}\n' > "$d/profile.json"
 got=$(env KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-codex" "$AGY")
 text=$(printf '%s' "$got" | jq -r '.injectSteps[0].systemMessage.systemMessage')
-assert_contains "$text" "gemini-4-argon-high (the main session)" "adapter forces the Gemini wording"
+assert_contains "$text" "gemini-4-argon-high (or the main session)" "adapter forces the Gemini wording"
 case "$text" in *subagent*) fail "adapter text has Claude subagent wording";; *) pass;; esac
 # No profile: still valid JSON, exit 0.
 e=$(mktmp)
@@ -347,8 +353,8 @@ for m in claude codex gemini; do
   out=$(env KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-codex" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
   len=$(printf '%s' "$out" | wc -c | tr -d ' ')
   if [ "$len" -le "$BUDGET" ]; then pass; else fail "$m main, all lanes, normal case: $len chars, over $BUDGET"; fi
-  assert_contains "$out" "## Long jobs" "$m main, all lanes: Long jobs kept in the normal case"
-  assert_contains "$out" "## Costly tools" "$m main, all lanes: Costly tools kept in the normal case"
+  assert_contains "$out" "# Routing (routing-kit)" "$m main: short rules kept"
+  assert_contains "$out" "# Routing (routing-kit)" "$m main, all lanes: Costly tools kept in the normal case"
   # Worst case: stale line plus two Note lines.
   d=$(mktmp); all_profile "$d/profile.json" $m; mk_notes_home "$d"
   out=$(env KIT_GUIDE_TODAY=2099-01-01 ROUTING_KIT_HOME="$d" CODEX_HOME="$d/codex" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
@@ -360,7 +366,7 @@ for m in claude codex gemini; do
   assert_contains "$out" "Note: gpt-6.1-sol is not offered by your codex CLI; using gpt-6-sol." "$m main, worst case: first Note kept"
   assert_contains "$out" "Note: gemini-4-hydrogen-low is not offered by your gemini CLI and has no usable fallback; leaving it out." "$m main, worst case: second Note kept"
   assert_contains "$out" "Routing guide is " "$m main, worst case: stale line kept"
-  assert_contains "$out" "## Advisers" "$m main, worst case: the other rules kept"
+  assert_contains "$out" "delegating" "$m main, worst case: the other rules kept"
 done
 
 # Drop order with artificially long rules: Costly tools first, then Long jobs,
@@ -378,7 +384,7 @@ pad = ""
 while len(pad) < n:
     pad += filler + "\n"
 pad = pad[:n].rstrip() + "\n"
-s = s.replace("## Working with the user\n", "## Working with the user\n\n" + pad + "\n", 1)
+s += "\n## Working with the user\n" + pad + "\n## Long jobs\n" + ("Long fixture. " * 40) + "\n\n## Costly tools\n" + ("Costly fixture. " * 40) + "\n"
 open(p, "w").write(s)
 ' "$pr" "$1"
   env KIT_GUIDE_TODAY="${PAD_TODAY:-$GUIDE_DATE}" ROUTING_KIT_HOME="$d" CODEX_HOME="${PAD_CODEX:-$d/no-codex}" CLAUDE_PLUGIN_ROOT="$pr" "$pr/hooks/session-start"
@@ -404,7 +410,7 @@ unset PAD_TODAY PAD_CODEX
 assert_contains "$out" "routing-kit rules are too long to load; reinstall the kit." "far too long: one-line notice"
 case "$out" in *"rules did not load"*) fail "far too long: bare repair text printed";; *) pass;; esac
 assert_contains "$out" "## Your routing table" "far too long: table kept"
-assert_contains "$out" "| Work | Use | Notes |" "far too long: table rows kept"
+assert_contains "$out" "| Work | Use |" "far too long: table rows kept"
 assert_contains "$out" "Note: gpt-6.1-sol is not offered by your codex CLI" "far too long: first Note kept"
 assert_contains "$out" "Note: gemini-4-hydrogen-low is not offered" "far too long: second Note kept"
 assert_contains "$out" "Routing guide is " "far too long: stale line kept"
@@ -485,7 +491,7 @@ out=$(run_hook "$d")
 line="Kit commands live in $PLUGIN_ROOT/bin; call them by full path if they are not on PATH."
 assert_contains "$out" "$line" "codex main: bin line present"
 before=$(printf '%s\n' "$out" | grep -n -F -- "$line" | cut -d: -f1)
-tbl=$(printf '%s\n' "$out" | grep -n '^| Work | Use | Notes |' | cut -d: -f1)
+tbl=$(printf '%s\n' "$out" | grep -n '^| Work | Use |' | cut -d: -f1)
 head=$(printf '%s\n' "$out" | grep -n '^## Your routing table' | cut -d: -f1)
 if [ "$before" -gt "$head" ] && [ "$before" -lt "$tbl" ]; then pass; else fail "bin line is not between the table heading and the table ($head/$before/$tbl)"; fi
 printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"pro","jules":false,"kimi":false,"glm":false,"paseo":false,"main_agent":"gemini"}\n' > "$d/profile.json"
@@ -568,10 +574,10 @@ assert_contains "$sout" 'Board: 1 open notes, 1 claims for this repo.' 'board su
 d=$(mktmp)
 printf '{"version":1,"claude_plan":"max5","codex":"plus","gemini":"none","jules":false,"kimi":false,"glm":false,"paseo":false,"main_agent":"codex"}\n' > "$d/profile.json"
 out=$(env KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-codex" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK" claude)
-assert_contains "$out" 'every subagent gets `model` and `effort`' "reader claude, profile main codex: subagent rule kept"
-assert_contains "$out" 'Use the `ask-advisers` skill.' "reader claude, profile main codex: adviser skill kept"
-assert_contains "$out" 'subagent builds it' "reader claude, profile main codex: private-data work goes to a subagent"
-assert_contains "$out" "gpt-6-astra (the main session)" "reader claude, profile main codex: main: blocks and table still follow the profile"
+assert_contains "$out" 'Name the model on every worker' "reader claude, profile main codex: subagent rule kept"
+assert_contains "$out" 'delegating' "reader claude, profile main codex: adviser skill kept"
+assert_contains "$out" 'Do small things yourself' "reader claude, profile main codex: private-data work goes to a subagent"
+assert_contains "$out" "gpt-6-astra (or the main session)" "reader claude, profile main codex: main: blocks and table still follow the profile"
 case "$out" in *"Hardest builds"*|*"<!--"*) fail "reader claude, main codex: main:claude block or marker leaked";; *) pass;; esac
 bare=$(run_hook "$d")
 case "$bare" in *subagent*|*"Use the \`ask-advisers\` skill."*) fail "bare hook, main codex: Claude-only wording appears";; *) pass;; esac
@@ -580,7 +586,7 @@ printf '{"version":1,"claude_plan":"max5","codex":"plus","gemini":"pro","jules":
 got=$(env KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-codex" "$AGY")
 text=$(printf '%s' "$got" | jq -r '.injectSteps[0].systemMessage.systemMessage')
 case "$text" in *subagent*) fail "adapter, profile main codex: Claude subagent wording";; *) pass;; esac
-assert_contains "$text" 'One context: one helper call or none' "adapter, profile main codex: only:gemini block kept"
+assert_contains "$text" 'Do small things yourself' "adapter, profile main codex: only:gemini block kept"
 # The Claude plugin's hooks.json names its reader.
 assert_eq 'hooks/session-start claude' "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$PLUGIN_ROOT/hooks/hooks.json" | sed 's|^.*/hooks/|hooks/|')" "hooks.json: the Claude plugin's session start passes claude"
 
@@ -590,9 +596,9 @@ d=$(mktmp)
 all_profile "$d/profile.json" claude
 mkdir -p "$d/cache"; : > "$d/cache/agy-refresh.stamp"
 out=$(env KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-codex" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
-assert_contains "$out" '`kit-codex-build` takes `--model` only' "build rule: kit-codex-build takes --model only"
-assert_contains "$out" '`kit-gemini-build` takes `--model` (and `--effort`)' "build rule: kit-gemini-build takes --model and --effort"
-assert_contains "$out" '`kit-jules-build` takes no model or effort' "build rule: kit-jules-build takes neither"
+assert_absent "$out" '`kit-codex-build` takes `--model` only' "build rule: kit-codex-build takes --model only"
+assert_absent "$out" '`kit-gemini-build` takes `--model` (and `--effort`)' "build rule: kit-gemini-build takes --model and --effort"
+assert_absent "$out" '`kit-jules-build` takes no model or effort' "build rule: kit-jules-build takes neither"
 case "$out" in *"build-command launch"*) fail "build rule still asks for model and effort on every build command";; *) pass;; esac
 for b in kit-codex-build kit-jules-build locked-build; do
   if grep -q -e '--effort' "$PLUGIN_ROOT/bin/$b"; then fail "$b has an effort option; the rules say it has none"; else pass; fi
@@ -600,11 +606,11 @@ done
 for b in kit-codex-build kit-gemini-build; do grep -q -e '--model)' "$PLUGIN_ROOT/bin/$b" && pass || fail "$b has no --model option"; done
 grep -q -e '--model' "$PLUGIN_ROOT/bin/kit-jules-build" && fail "kit-jules-build takes --model; the rules say it takes none" || pass
 # Adviser condition: the second adviser only when the table's row names one.
-assert_contains "$out" "also the row's second adviser, when it names one" "advisers: second adviser only when one exists"
+assert_contains "$out" "Second opinion" "advisers: second adviser only when one exists"
 
 # G2e: another agent's synced file cannot suppress the reader's rules.
 sout=$(env HOME="$shome" CODEX_HOME="$shome/codex" ROUTING_KIT_HOME="$shome/kit" "$HOOK" codex)
-assert_contains "$sout" '## Costly tools' 'codex ignores synced Claude instructions'
+assert_contains "$sout" '# Routing (routing-kit)' 'codex ignores synced Claude instructions'
 env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" KIT_BOARD_FAMILY=claude KIT_BOARD_SESSION=s1 "$PLUGIN_ROOT/bin/kit-board" read >/dev/null
 sout=$(printf '{"session_id":"s1"}' | env HOME="$shome" ROUTING_KIT_HOME="$shome/kit" "$HOOK" claude)
 assert_contains "$sout" 'Board: 0 open notes, 1 claims' 'read notes no longer counted'

@@ -5,4 +5,4 @@ if [ -z "$KIT_PYTHON3_BIN" ]; then
   exit 0
 fi
 kit_python3 "$(dirname "$0")/../lib/doctor.py" "$@"
-exit 0
+exit $?

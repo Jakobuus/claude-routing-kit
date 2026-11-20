@@ -71,6 +71,12 @@ the default when no lead is chosen.
    - `command -v gh`: the GitHub CLI. Only needed for Jules, which works on code on GitHub.
    - Paseo: `command -v paseo`, or on a Mac `/Applications/Paseo.app` (optional).
 
+Check sign-in for the main agent and each helper CLI found: `claude auth status` (JSON
+`"loggedIn": true`), `codex login status` (exit 0), `agy models` (lists models), and
+`jules remote list --repo`. Give a short list: installed and signed in, or what to run.
+Fix missing sign-ins now: ask them to run `claude auth login`, `codex login`, start `agy`
+and sign in, or `jules login` in their own terminal. Check again before moving on.
+
 On Linux and WSL, tell them once: "Kimi and GLM won't be offered here: the kit only runs them
 inside the Mac's sandbox, and Linux has no equivalent it trusts yet."
 
@@ -299,15 +305,20 @@ sandbox, not a failure.
 much of your Claude limit you have used, so the kit can spread work fairly. If you already have a
 status line, it keeps showing." If yes, run `kit-statusline install`.
 
-**Paseo** (only if `paseo` was found in step 2). Offer the Paseo pill: a small badge in Paseo that
-shows how much of each plan is used. If yes:
+**Paseo.** Say: "The Paseo app lets you watch and stop the kit's builds on your Mac or
+phone. Builds keep running when you close the terminal. Its routing-kit pill shows how much of
+each plan you have used this week. I recommend it. Would you like to use Paseo?"
+
+If yes and it is not installed, ask them to install the Paseo app themselves and come back.
+If they have it, offer the pill. If yes:
 ```
 paseo plugin install https://github.com/Jakobuus/claude-routing-kit.git --path paseo-pill
 kit-profile set paseo true
 ```
-Otherwise `kit-profile set paseo false`. The `paseo` key only turns the pill on; it does not change
-how builds run. If they also want Codex builds to go through Paseo, run
-`kit-profile set codex_build_transport paseo` (the default is `direct`).
+If no, `kit-profile set paseo false`.
+
+Ask separately: "Would you like Codex builds to run through Paseo?" If yes, run
+`kit-profile set codex_build_transport paseo`. A no changes nothing else.
 
 ## Step 6: Safety notes
 
@@ -391,7 +402,7 @@ For each repo they name, first run `kit-sync repo PATH --dry-run` and read the r
 
 `kit-sync rules|skills|hooks --undo` (or `kit-sync all --undo`) takes out the kit's rules block, skill links and hook entries. It never restores old copies. It removes the Codex trust block it wrote (one block at the end of config.toml between two `# routing-kit hook trust` comment lines; if anything was added after it, nothing is removed and it tells you to remove it by hand) and leaves the `project_doc_max_bytes` line in Codex's config.toml; remove that by hand if wanted. It refuses a rules block edited by hand unless `--force` is added. Shared skills are the kit's own skills plus folders listed under `skills` in the profile. Edit `skills` and `products` by hand in `~/.config/routing-kit/profile.json`; `kit-route` uses `products` to find options for media and document jobs.
 
-`kit-doctor` lists hand edits and missing pieces in what kit-sync wrote, rule files too big for an agent, new hook errors since the last check, and media jobs from the last 7 days with how many got a suggested route (it cannot tell whether the agent followed it). `kit-board` supports post, read, claims and send. `<owner> says (quoted via <from>)` shows the profile's `owner_name` (`kit-profile set owner_name NAME`), or "the owner"; another agent's note is not the owner's approval. `kit-quota --pick "<row name from the routing table>"`, for example `kit-quota --pick "Read-only lookups"`, names the model in that row whose plan has the most room left this week.
+`kit-doctor` lists hand edits and missing pieces in what kit-sync wrote, rule files too big for an agent, new hook errors since the last check, and media jobs from the last 7 days with how many got a suggested route (it cannot tell whether the agent followed it). `kit-board` supports post, read, claims and send. `<owner> says (quoted via <from>)` shows the profile's `owner_name` (`kit-profile set owner_name NAME`), or "the owner"; another agent's note is not the owner's approval. `kit-quota --pick "<row name from the routing table>"`, for example `kit-quota --pick "Lookups, bulk edits, data entry"`, names the model in that row whose plan has the most room left this week.
 
 ## Step 8: Run the self-test
 
@@ -416,7 +427,11 @@ Run `kit-selftest`. Check lines say `<check>: ok`, `<check>: FAIL: <fix>` or `<c
 
 ## Step 9: Last screen
 
-Show them, briefly:
+Run `kit-doctor --setup` before showing the screen. Handle every `fix` line, or ask them to
+handle it, then run it again until the last line is `setup: all ok`. If a fix cannot be
+completed, say which line is left and why. Read `recommended:` lines to them once; do not push.
+
+Show them, briefly, that the setup check passed (only if it did), and:
 
 1. **What was installed.** Only what applies:
    - Claude Code: the routing-kit plugin;
@@ -446,7 +461,7 @@ Show them, briefly:
    for Codex or Gemini, start the agent again (Codex: `kit-sync all` trusts the hooks after its selftest unless it
    printed a trust warning; see step 7). From then on they load by themselves at the start of every session. Check once: in the
    new session, ask "Which model do you send a read-only lookup to?" The answer should match the
-   Read-only lookups row of the table. If it does not, the rules did not load: go back to step 7.
+   Lookups, bulk edits, data entry row of the table. If it does not, the rules did not load: go back to step 7.
 5. **How to see usage:** `kit-quota`. See [Usage and build commands](README.md#usage-and-build-commands)
    for optional Claude database and banked-reset settings, stale readings, Jules limits,
    and the Codex/Gemini build flags and exit codes. Codex builds go through Paseo by default
@@ -503,3 +518,5 @@ Show them, briefly:
    Either way: if they stored Kimi or GLM keys, they can delete them with
    `security delete-generic-password -s routing-kit-kimi` (and `routing-kit-glm`), and delete the
    keys on the provider's site.
+
+The kit’s rules block is deliberately short; the `delegating` skill holds the build commands.

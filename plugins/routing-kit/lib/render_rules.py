@@ -60,17 +60,6 @@ def filter_blocks(text, agent, profile, lead):
 
 
 
-def kit_only_section(text, heading='## Sessions and media'):
-    """With profile kit_rules "replace", the owner's private rules stand in for the kit's
-    generic rules; only the kit's own new section (board and media) is kept."""
-    lines, keep, out = text.splitlines(), False, []
-    for line in lines:
-        if line.startswith('## '):
-            keep = line.strip() == heading
-        if keep:
-            out.append(line)
-    return '\n'.join(out)
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--agent', required=True, choices=AGENTS)
@@ -90,7 +79,7 @@ def main():
             text = sys.stdin.read() if filename == '-' else Path(filename).read_text()
             if (filename == args.kit_rules and args.private_rules
                     and (profile or {}).get('kit_rules') == 'replace'):
-                text = kit_only_section(text)
+                text = ''
             part = filter_blocks(text, args.agent, profile, lead).rstrip('\n')
             if part:
                 parts.append(part)

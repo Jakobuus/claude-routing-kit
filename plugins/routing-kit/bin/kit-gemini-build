@@ -30,7 +30,8 @@ case "$NAME$MODEL$EFFORT" in *$'\t'*|*$'\n'*|*$'\r'*) kit_die 2 '--name and --mo
 [ -f "$BRIEF" ] || kit_die 2 "no such brief file: $BRIEF"
 GRACE=${KIT_AGY_TIMEOUT_GRACE:-60}
 [[ $GRACE =~ ^(0|[1-9][0-9]{0,5})$ ]] || kit_die 2 'KIT_AGY_TIMEOUT_GRACE must be nonnegative seconds'
-IDLE=${KIT_AGY_IDLE_SECS-900}
+# Allow 30 minutes without a file change, including thinking before the first write.
+IDLE=${KIT_AGY_IDLE_SECS-1800}
 [[ $IDLE =~ ^[1-9][0-9]*$ ]] || kit_die 2 'KIT_AGY_IDLE_SECS must be positive decimal seconds'
 DEADLINE=$((TIMEOUT + GRACE))
 agy_elapsed=0
@@ -326,5 +327,10 @@ build_patch || exit 4
 final_status='success'
 cat "$run_dir/build.patch"
 echo "kit-gemini-build: run dir: $run_dir"
+if [ -s "$run_dir/build.patch" ]; then
+  echo "next: git apply --index $run_dir/build.patch, run the checks, have the diff reviewed, commit"
+else
+  echo "next: no changes were made; read $run_dir/result.md"
+fi
 echo "kit-gemini-build: build patch: $run_dir/build.patch"
 [ -z "$branch" ] || echo "kit-gemini-build: branch: $branch (kept in $REPO)"

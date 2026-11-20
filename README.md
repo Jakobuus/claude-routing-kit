@@ -47,7 +47,7 @@ Set up https://github.com/Jakobuus/claude-routing-kit for me
 2. Start a new session. Your agent receives your routing table and any health or board notices at the start; ask it to show them when you want to see them.
 3. Work as usual. Your agent loads the rules, and the guards you enabled check commands as it works.
 4. Ask your agent to hand off a build. It can use `kit-codex-build`, `kit-gemini-build` or `kit-jules-build`. Review the patch, apply it in a test checkout, and run your checks before you commit or merge.
-5. Run `kit-quota` to see usage. Run `kit-quota --pick "Read-only lookups"` to choose an eligible model for that row.
+5. Run `kit-quota` to see usage. Run `kit-quota --pick "Lookups, bulk edits, data entry"` to choose an eligible model for that row.
 6. Agents can leave notes with `kit-board post` or send messages with `kit-board send --to TARGET TEXT`. Use `kit-board read` to read the board.
 7. For Claude Code, update with `claude plugin update routing-kit@routing-kit`, then run `kit-sync all` and start a new session. Run `kit-doctor` to check health. Use `kit-sync all --undo` to remove the shared rules, skills and hooks.
 
@@ -61,7 +61,9 @@ Claude Code, Codex or Antigravity can lead (Antigravity as lead is not tested en
 
 `kit-sync repo PATH` moves a repo's rule files into one shared AGENTS.md and commits the change (undo with `git revert`). `kit-sync rules|skills|hooks --undo` (or `kit-sync all --undo`) takes out the kit's rules block, skill links and hook entries (and the Codex trust block it wrote at the end of config.toml, if it is still the last thing there). It never restores old copies. `kit-sync hooks` marks the kit's Codex hooks trusted in Codex's config.toml only after `kit-selftest --hooks` passes; a failed selftest removes the mark again. It leaves the `project_doc_max_bytes` line in Codex's config.toml; remove it by hand if you want. It refuses a rules block edited by hand unless you add `--force`.
 
-`kit-doctor` lists hand edits and missing pieces in what kit-sync wrote, rule files too big for an agent, new hook errors since the last check, and media jobs from the last 7 days with how many got a suggested route (it cannot tell whether the agent followed it). `kit-board` supports notes, claims and messages; inside Claude Code, Codex or Antigravity it knows which session you are from the agent's own session id (`kit-board whoami`). `KIT_BOARD_NAME` is for scripts outside an agent. A Claude session started from inside a Codex session is named as Codex. Owner quotes show as `<owner> says (quoted via …)`, with the profile's `owner_name` (`kit-profile set owner_name NAME`), or "the owner". Another agent's note is not the owner's approval. `kit-quota --pick "<row name from the routing table>"`, for example `kit-quota --pick "Read-only lookups"`, names the model in that row whose plan has the most room left this week.
+`kit-doctor --setup` checks your profile, installed agents and sign-ins, routed models, synced rules, skills and hooks, Codex hook trust, and Paseo. Each line says `ok`, gives a fix, or makes an optional recommendation; it never enables Paseo. Exit 1 means something needs fixing. Add `--json` for structured results. `--fast` stays silent when its file and PATH checks pass.
+
+`kit-doctor` lists hand edits and missing pieces in what kit-sync wrote, rule files too big for an agent, new hook errors since the last check, and media jobs from the last 7 days with how many got a suggested route (it cannot tell whether the agent followed it). `kit-board` supports notes, claims and messages; inside Claude Code, Codex or Antigravity it knows which session you are from the agent's own session id (`kit-board whoami`). `KIT_BOARD_NAME` is for scripts outside an agent. A Claude session started from inside a Codex session is named as Codex. Owner quotes show as `<owner> says (quoted via …)`, with the profile's `owner_name` (`kit-profile set owner_name NAME`), or "the owner". Another agent's note is not the owner's approval. `kit-quota --pick "<row name from the routing table>"`, for example `kit-quota --pick "Lookups, bulk edits, data entry"`, names the model in that row whose plan has the most room left this week.
 
 Setup offers two guards: one against destructive commands, and one that stops agents working in other repos from editing files in folders you name as your own (`kit-profile set owner_checkouts '["/path"]'`). Both are off unless you say yes; they are a seatbelt against agent mistakes, not a security boundary. Codex: `kit-sync hooks` runs the hooks selftest and, only if it passes, marks the kit hooks trusted in Codex (one marked block at the end of `$CODEX_HOME/config.toml`, by default `~/.codex/config.toml`), so they also run in `codex exec`. A failed selftest or `--undo` removes that block if it is still the exact last part of the file; otherwise kit-sync says so and you remove it by hand. If kit-sync prints a trust warning, check `/hooks` in Codex.
 
@@ -103,6 +105,7 @@ not reach the agent.
 |---|---|
 | `--paseo` / `--no-paseo` | Override `codex_build_transport` (`--paseo` for this run, `--no-paseo` for direct Codex). |
 | `--timeout SECS` | Paseo wait limit, positive seconds; timeout exits 124. |
+| `KIT_CODEX_CONTINUES=N` | How many times an agent that ends its turn with the work clearly unfinished is sent "continue" (default 3; `0` = off). Unfinished means a done-count line such as `items done: 1 of 2` with N below M, a brief that asks for one and a final message without it, or the last work paragraph before the three closing lists that plans or admits more to do. Closing lists and descriptions of incomplete input do not count as unfinished work. A timeout, a permission wait (exit 6) and errors are never continued. Paseo runs record `continues` in the manifest and `result.md`. |
 | `KIT_CODEX_KEEP_WORKTREE=1` | Keep the Paseo agent and copy for inspection. The final line names the kept copy. |
 | `KIT_CODEX_WORKTREES_ROOT` | Test knob. The Paseo workspace and agent are archived only for a copy inside this folder (default: the kit's `runs` folder); a copy outside it stays and the run stays pending. |
 | Exit 0 | Success. |
@@ -159,8 +162,24 @@ kit-retained prune --older-than DAYS
 readable retention time is never pruned.
 
 Blocking hook guards get 10 seconds each. Lines in `hook-errors.log` include timestamps.
-With Gemini available, **Exploration, big reads** goes to the Gemini research model:
-it writes a summary of facts and decides nothing. The routing table names the available model.
+The **Exploration, big reads, web research** row lists available research models.
+
+## What is new in 0.4.1
+
+- **Setup checks itself.** `kit-doctor --setup` prints one line per item: each agent installed and
+  signed in, the routed models your plans offer, rules, skills and hooks synced, Codex hook trust,
+  and Paseo. Each line says `ok` or what to run. START-HERE now checks sign-ins early, explains
+  Paseo in plain words and asks whether you want it (it never installs or switches it on for you),
+  and ends when `kit-doctor --setup` is all ok.
+- **Much shorter rules.** The rules block is now the routing table plus a few lines. How to hand off
+  a build moved into an on-demand skill, `delegating`, that loads only when a build starts. Any
+  strong model from another company than the builder may review, and Gemini may write code.
+- **Codex builds finish more often.** When a Codex build ends its turn with the work clearly not
+  done, `kit-codex-build` sends it "continue" (up to 3 times; set `KIT_CODEX_CONTINUES`).
+  Workers no longer stop early to report progress, and build commands print the next step.
+- **Steadier checks.** The delegation hook gets 10 seconds on a busy machine instead of letting the
+  call through, and it needs only the model named, not the effort. `kit-models-validate` checks
+  every field of the model list. The Gemini build idle limit is 30 minutes.
 
 ## What is new in 0.3
 
@@ -169,8 +188,6 @@ it writes a summary of facts and decides nothing. The routing table names the av
   maintainer refreshes it from time to time and ships it as a kit update. The kit tells you at
   session start when the guide is more than 7 days old, and the table notes any model your
   installed Codex or Gemini does not offer.
-- **Effort limits per model.** The table says how much thinking effort each model should get, and
-  where more effort only costs money (for example, one model is never used above `high`).
 - **Different briefs per model family.** A job handed to a Claude, OpenAI or Google model is
   written the way that family works best.
 - **Your choice of main agent.** Claude Code, Codex or Gemini can be the one in charge. The table
@@ -191,38 +208,36 @@ Someone who works in Claude Code, with Claude Pro and ChatGPT Plus, gets this ta
 of November 2026). The kit builds it from their answers and loads it into every session:
 
 <!-- example:start claude_plan=pro codex=plus gemini=none jules=false kimi=false glm=false main_agent=claude -->
-| Work | Use | Notes |
-|---|---|---|
-| Plans, architecture, judgment | Claude opus | medium, high for checks; big plans: ask Codex gpt-6-astra |
-| Features, bug fixes, tests | Codex gpt-6.1-sol · Claude sonnet | sonnet: medium or high, never above; pick by quota |
-| Review | Claude work → Codex gpt-6.1-sol, risky changes → gpt-6-astra; Codex work → Claude opus | the reviewer reads the diff itself, never the builder's report |
-| Second opinion | Codex gpt-6-astra; big calls add a fresh Claude opus subagent | via ask-advisers |
-| Screenshots, UI checks, prose from supplied material | Codex gpt-6.1-terra (trial) | trial: log 5; drop if 2 need fixes |
-| UI building | Claude opus | |
-| Read-only lookups | Claude haiku · Codex gpt-6-luna | haiku prompts under 100K tokens; Codex gpt-6-luna at high, never low |
-| Bulk mechanical edits | Codex gpt-6-luna (or a script it writes, run here) · Claude sonnet | Codex gpt-6-luna at high, never low; only where a script or test checks the result |
-| Web research | Codex gpt-6.1-sol with -c web_search="live" · Claude sonnet | |
-| Reading untrusted web pages or email while holding tools that can act | Claude opus | never Fable |
+| Work | Use |
+|---|---|
+| Plans, architecture, judgment | Claude opus (or the main session) |
+| Features, fixes, tests | Codex gpt-6.1-sol · Claude sonnet |
+| Review | a strong model from another company than the builder: Codex gpt-6-astra · Claude opus |
+| Second opinion | Codex gpt-6-astra; big calls add Claude opus |
+| Exploration, big reads, web research | Codex gpt-6.1-sol with web search · Claude sonnet |
+| Lookups, bulk edits, data entry | Codex gpt-6-luna · Claude haiku |
+| UI building | Claude opus |
+| Screenshots, UI checks | Codex gpt-6.1-terra |
+| Web pages or email while holding tools that can act | Claude opus |
 <!-- example:end -->
 
 Someone who works in Codex, with ChatGPT Plus and no Claude plan, gets this one:
 
 <!-- example:start claude_plan=none codex=plus gemini=none jules=false kimi=false glm=false main_agent=codex -->
-| Work | Use | Notes |
-|---|---|---|
-| Plans, architecture, judgment | Codex gpt-6-astra (the main session) | strong models plan and review, never code |
-| Features, bug fixes, tests | Codex gpt-6.1-sol | |
-| Review | fresh Codex gpt-6-astra session | no other lane to cross-check against |
-| Second opinion | fresh Codex gpt-6-astra session | follow the Advisers rules; no other lane to ask |
-| Screenshots, UI checks, prose from supplied material | Codex gpt-6.1-terra (trial) | trial: log 5; drop if 2 need fixes |
-| UI building | Codex gpt-6.1-sol | |
-| Read-only lookups | Codex gpt-6-luna | Codex gpt-6-luna at high, never low |
-| Bulk mechanical edits | Codex gpt-6-luna (or a script it writes, run here) | Codex gpt-6-luna at high, never low; only where a script or test checks the result |
-| Web research | Codex gpt-6.1-sol with -c web_search="live" | |
-| Reading untrusted web pages or email while holding tools that can act | Codex gpt-6.1-sol | never the top model |
+| Work | Use |
+|---|---|
+| Plans, architecture, judgment | Codex gpt-6-astra (or the main session) |
+| Features, fixes, tests | Codex gpt-6.1-sol |
+| Review | a fresh Codex gpt-6-astra session that did not build it |
+| Second opinion | fresh Codex gpt-6-astra session |
+| Exploration, big reads, web research | Codex gpt-6.1-sol with web search |
+| Lookups, bulk edits, data entry | Codex gpt-6-luna |
+| UI building | Codex gpt-6.1-sol |
+| Screenshots, UI checks | Codex gpt-6.1-terra |
+| Web pages or email while holding tools that can act | Codex gpt-6.1-sol |
 <!-- example:end -->
 
-With a Google AI plan, the table also offers Argon for builds and Hydrogen for bulk edits.
+With a Google AI plan, the table also offers Gemini models for builds and research.
 Argon has a small separate weekly pool on Pro. Gemini builds use `kit-gemini-build`; usage
 appears in `kit-quota`. A bucket with a reset time but no remaining fraction shows as unknown.
 
@@ -351,3 +366,5 @@ rm -r ~/.config/routing-kit
 Then delete the PATH line, if you let the agent add one to `~/.zshrc`, `~/.bashrc` or `~/.bash_profile`. Skip the `paseo` line if you
 don't have the pill. [START-HERE.md](START-HERE.md) has the details, including how to delete stored
 Kimi and GLM keys.
+
+The kit’s rules block is deliberately short; the `delegating` skill holds the build commands.

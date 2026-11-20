@@ -27,8 +27,8 @@ codex_paseo_manifest() {
     --arg ended "$ended" --argjson exit "$exit_json" --arg patch "${paseo_patch:-}" \
     --arg workspace "${paseo_workspace:-}" --arg cleanup "${paseo_cleanup:-pending}" \
     --argjson archived "$archived" --argjson wsarchived "${paseo_workspace_archived:-false}" \
-    --argjson final "${paseo_patch_final:-false}" \
-    '{agent:$agent,repo:$repo,base:$base,worktree:$wt,branch:$branch,started:$started,ended:$ended,exit:$exit,patch:$patch,workspace:$workspace,cleanup:$cleanup,archived:$archived,workspace_archived:$wsarchived,patch_final:$final}' > "$run_dir/manifest.json.tmp" &&
+    --argjson final "${paseo_patch_final:-false}" --argjson continues "${paseo_continues:-0}" \
+    '{agent:$agent,repo:$repo,base:$base,worktree:$wt,branch:$branch,started:$started,ended:$ended,exit:$exit,patch:$patch,workspace:$workspace,cleanup:$cleanup,archived:$archived,workspace_archived:$wsarchived,patch_final:$final,continues:$continues}' > "$run_dir/manifest.json.tmp" &&
     mv -f "$run_dir/manifest.json.tmp" "$run_dir/manifest.json"
 }
 
@@ -460,6 +460,19 @@ codex_paseo_finalize() {
   return 0
 }
 
+# codex_paseo_wait_and_record AGENT SECS: waits for the agent, then saves its log and last message
+# (log.txt, result.md). Sets $code to what the state maps to: 0 idle, 6 permission, 124 timeout,
+# 4 anything else. (Not a command substitution: a signal must reach this shell during the wait.)
+codex_paseo_wait_and_record() {
+  local agent=$1 secs=$2 state
+  paseo wait "$agent" --timeout "$secs" --json > "$run_dir/wait.json"
+  state=$(kit_jq -r '.status' "$run_dir/wait.json")
+  case "$state" in idle) code=0 ;; permission) code=6 ;; timeout) code=124 ;; *) code=4 ;; esac
+  paseo logs "$agent" > "$run_dir/log.txt" 2>&1
+  paseo logs "$agent" --filter text --tail 1 2>/dev/null | sed '/^---$/d' > "$run_dir/result.md"
+  grep -q '[^[:space:]]' "$run_dir/result.md" || echo "(no final message from Codex; exit $code)" > "$run_dir/result.md"
+}
+
 # Optional Paseo transport for the Codex build runner.
 codex_paseo_build() {
   local repo agent state code=0 info
@@ -526,12 +539,36 @@ codex_paseo_build() {
   # Recorded only when exactly one workspace has this cwd; the archive step lists again and compares.
   paseo_workspace=$(paseo workspace ls --json 2>/dev/null | kit_jq -r --arg wt "$run_dir/wt" '[.[] | select(.cwd == $wt)] | if length == 1 then .[0].workspaceId // empty else empty end' 2>/dev/null) || paseo_workspace=""
   codex_paseo_manifest
-  paseo wait "$agent" --timeout "$TIMEOUT" --json > "$run_dir/wait.json"
-  state=$(kit_jq -r '.status' "$run_dir/wait.json")
-  case "$state" in idle) code=0 ;; permission) code=6 ;; timeout) code=124 ;; *) code=4 ;; esac
-  paseo logs "$agent" > "$run_dir/log.txt" 2>&1
-  paseo logs "$agent" --filter text --tail 1 2>/dev/null | sed '/^---$/d' > "$run_dir/result.md"
-  grep -q '[^[:space:]]' "$run_dir/result.md" || echo "(no final message from Codex; exit $code)" > "$run_dir/result.md"
+  # One wait budget for the whole run: a continue never resets it.
+  local deadline continue_why="" left
+  deadline=$(( $(date +%s) + TIMEOUT ))
+  paseo_continues=0
+  codex_paseo_wait_and_record "$agent" "$TIMEOUT"
+  # An agent that ended its turn with the work clearly unfinished gets a "continue" (up to
+  # KIT_CODEX_CONTINUES times). Only a finished wait (idle) is ever continued: a timeout, a
+  # permission wait and an error keep their own ending.
+  while [ "$code" -eq 0 ] && continue_why=$(codex_continue_check "$run_dir/brief.md" "$run_dir/result.md"); do
+    if [ "$paseo_continues" -ge "${KIT_CODEX_CONTINUES_N:-3}" ]; then
+      echo "(stopped early after $paseo_continues continues: $continue_why)" >> "$run_dir/result.md"
+      break
+    fi
+    left=$(( deadline - $(date +%s) ))
+    if [ "$left" -lt 1 ]; then
+      echo "(stopped early after $paseo_continues continues: $continue_why; the time budget is used up)" >> "$run_dir/result.md"
+      code=124
+      break
+    fi
+    codex_continue_message > "$run_dir/continue-message.txt"
+    paseo send "$agent" --no-wait --prompt-file "$run_dir/continue-message.txt" >/dev/null 2>&1 || {
+      echo "(stopped early after $paseo_continues continues: could not send the continue message)" >> "$run_dir/result.md"
+      code=4
+      break
+    }
+    paseo_continues=$((paseo_continues + 1))
+    codex_paseo_manifest
+    codex_paseo_wait_and_record "$agent" "$left"
+  done
+  [ "$paseo_continues" -eq 0 ] || echo "(continued $paseo_continues time(s) after the agent stopped early)" >> "$run_dir/result.md"
   [ "$code" -ne 124 ] || echo "(timed out after ${TIMEOUT}s; the text above may not be final)" >> "$run_dir/result.md"
   if [ "$code" -eq 6 ]; then
     echo '(waiting on a permission: answer it in the Paseo app)' >> "$run_dir/result.md"

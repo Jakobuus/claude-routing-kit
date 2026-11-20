@@ -492,6 +492,7 @@ else
     fail "cleanup: build.patch was not written"
   fi
   assert_contains "$out" "kit-codex-build: run dir: $run_dir" "cleanup: run dir line unchanged"
+  assert_contains "$out" "next: git apply --index $run_dir/build.patch, run the checks, have the diff reviewed, commit" "successful build gives the next step"
   assert_contains "$out" "kit-codex-build: build patch: $run_dir/build.patch" "cleanup: the patch path is printed"
   for keep in brief.md codex-output.txt secret-scan.txt; do
     if [ -f "$run_dir/$keep" ]; then pass; else fail "cleanup: $keep should survive in the run dir"; fi

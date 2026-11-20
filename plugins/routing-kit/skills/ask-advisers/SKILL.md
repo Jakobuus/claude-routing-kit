@@ -1,6 +1,6 @@
 ---
 name: ask-advisers
-description: Use for a second opinion — a fork you're weighing, a surprise, a stubborn bug, a plan or diff before you commit to it, or when the user says "ask advisers", "second opinion", "get advice". Codex is the default adviser when the user has it; a fresh Claude Opus subagent joins for big decisions, or stands alone for Claude-only users.
+description: Second opinions. Use when a decision is hard to undo or expensive if wrong, or when the user asks for advice.
 ---
 
 # Ask advisers
@@ -13,12 +13,9 @@ verdicts.
 Take the advisers from the **Second opinion** row of the routing table in your context. That row
 names the adviser for normal doubt and, for big decisions, the second adviser to add.
 
-- **Normal doubt**: the adviser the row names first (with Codex, its strong model). It doesn't
-  spend Claude's limits, so ask freely. If the row names only a fresh Claude subagent, use that.
-- **Big decision** (hard to undo, a plan before committing to it, a bug after two failed fixes, or
-  the user asks): the first adviser plus the second one the row names ("big calls add ..."), in
-  parallel, on the same brief. If the row names no second adviser, say in your reply that only one
-  company's model looked at it.
+Choose whether the cost of being wrong warrants advice. Use the Second opinion row;
+for a big decision, include its additional adviser on the same brief.
+
 - **The advisers disagree on something that matters**: settle it with a test, a search or a check,
   or ask the user. Another round of argument settles nothing.
 
@@ -44,11 +41,11 @@ worded like an attack ("where can it escape?") can be refused by the adviser's s
 
 Run each one in the background. Always name the model.
 
-Codex (strongest model, unsandboxed, told not to edit):
+Codex (read-only instructions):
 
 ```bash
 codex exec -m "<Codex model from the Second opinion row>" --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check -C <repo> -o <dir>/codex.md \
-  "Read <dir>/brief.md and answer it exactly as it asks. You may explore files and run read-only commands to check facts, mostly through cheaper subagents. Do not edit, create or delete any file except your answer file." \
+  "Read <dir>/brief.md and answer it exactly as it asks. You may explore files and run read-only commands to check facts. Do not edit, create or delete any file except your answer file." \
   < /dev/null 2>&1 | tee <dir>/codex.log
 ```
 
@@ -64,7 +61,7 @@ Gemini from a Claude or Codex main session (in the repo folder, unsandboxed, tol
 
 ```bash
 cd <repo> && agy --dangerously-skip-permissions --model "<Gemini model from the Second opinion row>" --output-format json \
-  -p "Read <dir>/brief.md and answer it exactly as it asks. You may explore files and run read-only commands to check facts, mostly through cheaper subagents. Do not edit, create or delete any file except your answer file." \
+  -p "Read <dir>/brief.md and answer it exactly as it asks. You may explore files and run read-only commands to check facts. Do not edit, create or delete any file except your answer file." \
   < /dev/null > <dir>/gemini.json
 ```
 

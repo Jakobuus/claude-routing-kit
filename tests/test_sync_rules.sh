@@ -387,17 +387,16 @@ assert stats['ok']>600 and stats['refused']>100 and stats['undo_exact']>200,stat
 print('RUNS',RUNS,stats)
 PY
 assert_eq 0 "$?" '21 property: outside bytes never lost over 300 random sequences'
-# 22. The three written files are agent-neutral: only Claude's file speaks of subagents and
-# skills by name, all carry the launch, board and media lines, none is near 24,000 bytes.
+# 22. All readers get the short shared rules, without the retired board/media steps.
 setup; run; ok '22 sync'
 for f in "$a" "$b" "$d"; do
- grep -q 'name the model\|Always name the model' "$f" && pass || fail "22 $f: launch rule missing"
- grep -qF 'run `kit-board claims` and post a claim' "$f" && pass || fail "22 $f: board claim line missing"
+ grep -q 'Name the model' "$f" && pass || fail "22 $f: launch rule missing"
+ ! grep -qF 'run `kit-board claims` and post a claim' "$f" && pass || fail "22 $f: board claim line missing"
  grep -qF '<owner> says (quoted via' "$f" && pass || fail "22 $f: board approval line missing"
- grep -qF 'run `kit-route "<the request>"`' "$f" && pass || fail "22 $f: media line missing"
+ ! grep -qF 'run `kit-route "<the request>"`' "$f" && pass || fail "22 $f: media line missing"
  [ "$(wc -c < "$f" | tr -d ' ')" -lt 24000 ] && pass || fail "22 $f: over 24000 bytes"
 done
-grep -q 'every subagent gets `model`' "$a" && pass || fail '22 claude file lacks the Agent-call rule'
+grep -q 'Name the model on every worker' "$a" && pass || fail '22 claude file lacks the Agent-call rule'
 for f in "$b" "$d"; do
  sed '/^| Work/,$d' "$f" | grep -qi 'subagent\|Agent call\|writing-plans' && fail "22 $f: Claude-only wording in the rules text" || pass
 done

@@ -25,9 +25,16 @@ KIT_DIR=$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null) || KIT_DIR
 
 [ -n "$KIT_PYTHON3_BIN" ] || exit 0
 KIT_DIR_Q=$(kit_shell_quote "$KIT_DIR")
-kit_python3 - "$MODELS_FILE" "$PROFILE_FILE" "$TODAY" "$KIT_DIR_Q" <<'PY' 2>/dev/null
+kit_python3 - "$MODELS_FILE" "$PROFILE_FILE" "$TODAY" "$KIT_DIR_Q" "$KIT_HOME/research-pending.json" <<'PY' 2>/dev/null
 import datetime, json, sys
 models, profile, today, kit_dir = sys.argv[1:5]
+try:
+    with open(sys.argv[5]) as f:
+        pending = json.load(f)
+    if type(pending['changes']) is int and pending['changes'] > 0 and isinstance(pending['command'], str) and not any(ord(c) < 32 for c in pending['command']):
+        print('Model research waits for your click (%d change(s)): %s' % (pending['changes'], pending['command']))
+except Exception:
+    pass
 unreadable = "Routing guide date unreadable; reinstall the kit."
 try:
     with open(models) as f:

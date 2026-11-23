@@ -1,0 +1,119 @@
+{
+  "version": 2,
+  "checked": "2026-11-15",
+  "claude": {
+    "top": "claude-fable-5-2",
+    "strong": "opus",
+    "build": "sonnet",
+    "lookup": "haiku"
+  },
+  "codex": {
+    "strong": "gpt-6-astra",
+    "review": "gpt-6.1-sol",
+    "build": "gpt-6.1-sol",
+    "screens": "gpt-6.1-terra",
+    "lookup": "gpt-6-luna"
+  },
+  "gemini": {
+    "strong": "gemini-4-argon-high",
+    "build": "gemini-4-argon-high",
+    "long_read": "gemini-4-argon-high",
+    "mid": "gemini-4-hydrogen-medium",
+    "lookup": "gemini-4-hydrogen-low",
+    "research": "gemini-4-hydrogen-high"
+  },
+  "effort": {
+    "claude-fable-5-2": {
+      "use": "high",
+      "max": "high"
+    },
+    "opus": {
+      "use": "medium",
+      "max": "high"
+    },
+    "sonnet": {
+      "use": "medium",
+      "max": "high"
+    },
+    "gpt-6-luna": {
+      "use": "high",
+      "min": "high"
+    }
+  },
+  "fallbacks": {
+    "gpt-6.1-sol": "gpt-6-sol",
+    "gpt-6.1-terra": "gpt-6.1-sol",
+    "claude-fable-5-2": "opus"
+  },
+  "kimi": {
+    "build": "kimi-k2.7-code",
+    "base_url": "https://api.moonshot.ai/anthropic",
+    "host": "api.moonshot.ai"
+  },
+  "glm": {
+    "build": "glm-5.3",
+    "base_url": "https://api.z.ai/api/anthropic",
+    "host": "api.z.ai"
+  },
+  "pricing": {
+    "opus": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "sonnet": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "haiku": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "gpt-6-astra": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "gpt-6-sol": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "gpt-6.1-sol": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "gpt-6.1-terra": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "claude-fable-5-2": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "gpt-6-luna": {
+      "price_in_per_mtok": null,
+      "price_out_per_mtok": null
+    },
+    "kimi-k2.7-code": {
+      "price_in_per_mtok": 0.95,
+      "price_out_per_mtok": 4.0
+    },
+    "glm-5.3": {
+      "price_in_per_mtok": 1.4,
+      "price_out_per_mtok": 4.4
+    }
+  },
+  "trials": {
+    "gemini-4-argon-high": {
+      "runs": 5,
+      "ledger": "trials.tsv"
+    },
+    "gpt-6.1-terra": {
+      "runs": 5,
+      "ledger": "trials.tsv"
+    },
+    "jules": {
+      "runs": 5,
+      "ledger": "trials.tsv"
+    }
+  },
+  "pricing_checked": "2026-09-29, providers pricing pages; cached input is billed at the full input price here, so spend is an upper estimate"
+}

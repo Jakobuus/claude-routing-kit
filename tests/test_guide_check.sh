@@ -84,5 +84,18 @@ pull" "$got" "stale line: path '$nm' survives a shell"
   [ ! -e "$q/PWNED" ] && [ ! -e "$q/$nm/PWNED" ] && pass || fail "stale line ran a command from the path '$nm'"
 done
 
+# Pending research appears even while the guide is fresh; malformed markers are silent.
+export ROUTING_KIT_HOME="$d/kit"
+mkdir -p "$ROUTING_KIT_HOME"
+printf '{"date":"2026-11-20","changes":2,"command":"/tmp/Publish research.command"}' > "$ROUTING_KIT_HOME/research-pending.json"
+out=$("$CHECK" --models "$d/m.json" --today 2026-11-15)
+assert_eq "Model research waits for your click (2 change(s)): /tmp/Publish research.command" "$out" "pending research line"
+printf '{broken' > "$ROUTING_KIT_HOME/research-pending.json"
+out=$("$CHECK" --models "$d/m.json" --today 2026-11-15)
+assert_eq "" "$out" "unreadable pending marker is silent"
+rm "$ROUTING_KIT_HOME/research-pending.json"
+out=$("$CHECK" --models "$d/m.json" --today 2026-11-15)
+assert_eq "" "$out" "absent pending marker is silent"
+
 echo "PASS $PASS_COUNT / FAIL $FAIL_COUNT"
 [ "$FAIL_COUNT" -eq 0 ]

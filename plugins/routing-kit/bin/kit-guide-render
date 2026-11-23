@@ -1,8 +1,9 @@
 #!/bin/bash
 # kit-guide-render [--data F] [--out F|-] [--check] [--domains F] — renders
-# guide/guide.json to guide/FIELD-GUIDE.md, deterministically. --check exits 1
+# guide/guide.json to guide/FIELD-GUIDE.md and README example tables. --check exits 1
 # when the file differs from the render (or is missing). Invalid data is
-# refused, never rendered. See lib/guide_render.py.
+# refused, never rendered. --readme F selects another README. Custom --data/--out
+# renders only the guide unless --readme is supplied. See lib/guide_render.py.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"

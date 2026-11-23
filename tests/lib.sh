@@ -168,3 +168,13 @@ run_with_timeout() {
   fi
   return "$code"
 }
+
+# Resolve expectations about installed roles from the same public routing data.
+# Capture the path while sourcing: callers may change directory afterwards.
+RK_TEST_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+routed_model() {
+  /usr/bin/jq -r ".$1.$2" "${RK_TEST_MODELS:-$RK_TEST_ROOT/plugins/routing-kit/rules/models.json}"
+}
+routed_codex_list() {
+  /usr/bin/jq -c '{models: ([.codex[], (.fallbacks // {} | .[] | select(startswith("gpt-")))] | unique | map({slug: .}))}' "${RK_TEST_MODELS:-$RK_TEST_ROOT/plugins/routing-kit/rules/models.json}"
+}

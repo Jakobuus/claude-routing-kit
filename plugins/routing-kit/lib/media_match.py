@@ -18,7 +18,7 @@ CODE_WORDS = set(
     "localstorage "
     # languages and tools
     "typescript javascript python rust java kotlin ruby swift swiftui bash react vue svelte node "
-    "css html html5 json yaml sql nginx docker kubernetes webpack vite npm git github flask django "
+    "css html html5 json yaml sql nginx docker kubernetes webpack vite npm git flask django "
     "rails celery imagemagick "
     "php lua perl haskell clojure erlang golang powershell zsh laravel symfony jquery nextjs "
     "numpy tensorflow pytorch opencv matlab fortran cobol graphql".split())

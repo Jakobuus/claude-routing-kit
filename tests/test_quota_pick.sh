@@ -27,17 +27,17 @@ pick() {
   if [ "$rc" = 0 ] && [ "$out" = "$want" ]; then pass; else fail "$label (exit $rc; expected $want, got $out)"; fi
 }
 quota_fixture 10 10 10 30 0
-pick 'lowest weekly pace wins even below 100%' sonnet 'Features, fixes, tests'
+pick 'lowest weekly pace wins even below 100%' "$(routed_model claude build)" 'Features, fixes, tests'
 quota_fixture 10 40 10 10 0
-pick 'lower Codex pace wins' gpt-6.1-sol 'Features, fixes, tests'
+pick 'lower Codex pace wins' "$(routed_model codex build)" 'Features, fixes, tests'
 quota_fixture 81 1 10 30 0
-pick 'skip Claude five-hour window over 80%' gpt-6.1-sol 'Features, fixes, tests'
+pick 'skip Claude five-hour window over 80%' "$(routed_model codex build)" 'Features, fixes, tests'
 quota_fixture 80 1 10 30 0
-pick '80% five-hour window remains eligible' sonnet 'Features, fixes, tests'
+pick '80% five-hour window remains eligible' "$(routed_model claude build)" 'Features, fixes, tests'
 quota_fixture 10 1 81 30 25200
-pick 'skip stale Claude reading' gpt-6.1-sol 'Features, fixes, tests'
+pick 'skip stale Claude reading' "$(routed_model codex build)" 'Features, fixes, tests'
 quota_fixture 10 1 10 40 0
-pick 'quality list excludes cheap build from UI judgment' opus 'UI building'
+pick 'quality list excludes cheap build from UI judgment' "$(routed_model claude strong)" 'UI building'
 out=$("$QUOTA" --pick nonexistent 2>&1); rc=$?
 if [ "$rc" = 3 ] && [[ "$out" == *'no such job'* ]]; then pass; else fail 'unknown job exits 3 with no such job'; fi
 
@@ -81,8 +81,8 @@ for data in missing '{not json' '{"resets":[{"type":"bogus","expires":5}]}'; do
   assert_eq '1|' "$rc|$out" "unreadable or invalid bank: $data"
 done
 quota_fixture 10 1 10 40 0
-pick 'review picks the strong model with the most room' opus Review
-pick 'second opinion keeps primary adviser' gpt-6-astra 'Second opinion'
+pick 'review picks the strong model with the most room' "$(routed_model claude strong)" Review
+pick 'second opinion keeps primary adviser' "$(routed_model codex strong)" 'Second opinion'
 out=$("$QUOTA" --pick 'Hardest builds (long unattended, or failed twice)' 2>&1); rc=$?
 assert_eq 1 "$rc" 'unknown Fable share excludes Fable'
 rm -f "$BANK"
@@ -91,7 +91,7 @@ assert_eq 0 "$?" 'first add creates missing bank'
 # Exercise independent Gemini pool readings without calling any live CLI.
 fixture=$(mktmp)
 mkdir -p "$fixture/bin" "$fixture/rules"
-cp "$MODELS" "$fixture/rules/models.json"
+cp "$ROOT/tests/fixtures/routing-table/models.json" "$fixture/rules/models.json"
 cat > "$fixture/bin/kit-routing-table" <<'EOF'
 #!/bin/bash
 echo '| Pool | gemini-4-argon-high · gemini-4-hydrogen-medium | |'

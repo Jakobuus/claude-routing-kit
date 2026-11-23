@@ -167,6 +167,16 @@ readable retention time is never pruned.
 Blocking hook guards get 10 seconds each. Lines in `hook-errors.log` include timestamps.
 The **Exploration, big reads, web research** row lists available research models.
 
+## What is new in 0.4.3
+
+- **Image requests that mention GitHub route to image tools.** "Header image for a GitHub README" no
+  longer reads as coding work.
+- **Ready for model updates.** The example tables in this README are generated from the routing data,
+  and the tests read model names from it, so a release that moves a role to a newer model (for example
+  a new Codex review model) passes the checks without hand edits.
+- **Steadier tests.** A test run can keep its leftover check to its own temp folder
+  (`RK_TESTS_PRIVATE_TMP=1` with a private `TMPDIR`), so two runs on one machine do not fail each other.
+
 ## What is new in 0.4.2
 
 - **MIT license.** See [LICENSE](LICENSE).

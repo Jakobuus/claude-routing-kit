@@ -5,6 +5,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 PLUGIN_ROOT="$REPO_ROOT/plugins/routing-kit"
 HOOK="$PLUGIN_ROOT/hooks/session-start"
 cd "$REPO_ROOT"
+assert_eq "$(/usr/bin/jq -r .codex.strong "$PLUGIN_ROOT/rules/models.json")" "$(routed_model codex strong)" "model expectations survive a working-directory change"
 export HOME=$(mktmp)
 export CODEX_HOME="$HOME/.codex"
 
@@ -282,7 +283,7 @@ case "$out" in *opus*|*sonnet*|*haiku*|*fable*|*gemini-*|*argon-*|*hydrogen-*|*f
 case "$out" in *"Hardest builds"*|*"Background workers"*) fail "codex main: Claude-only rules appear";; *) pass;; esac
 assert_contains "$out" "Risky changes" "codex main: shared rules present"
 assert_contains "$out" "Kit commands live in $PLUGIN_ROOT/bin; call them by full path if they are not on PATH." "codex main: kit commands located by full path"
-assert_contains "$out" "gpt-6-astra (or the main session)" "codex main: Plans row"
+assert_contains "$out" "$(routed_model codex strong) (or the main session)" "codex main: Plans row"
 # Stale guide: git pull wording, no claude plugin.
 stale=$(env KIT_GUIDE_TODAY=2099-01-01 ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-codex" CLAUDE_PLUGIN_ROOT="$PLUGIN_ROOT" "$HOOK")
 assert_contains "$stale" "Update it: git -C " "codex main: stale line says git pull"
@@ -298,7 +299,7 @@ d=$(mktmp)
 printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"pro","jules":false,"kimi":false,"glm":false,"paseo":false,"main_agent":"gemini"}\n' > "$d/profile.json"
 out=$(run_hook "$d")
 case "$out" in *"<!--"*|*subagent*|*"claude plugin"*) fail "gemini main: marker, subagent or claude plugin in output";; *) pass;; esac
-assert_contains "$out" "gemini-4-argon-high (or the main session)" "gemini main: Plans row"
+assert_contains "$out" "$(routed_model gemini strong) (or the main session)" "gemini main: Plans row"
 assert_contains "$out" "delegating" "gemini main: Gemini lane rules present"
 # Profile with a main agent but no lane: repair line, exit 0.
 printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"none","jules":false,"kimi":false,"glm":false,"paseo":false,"main_agent":"codex"}\n' > "$d/profile.json"
@@ -326,7 +327,7 @@ assert_eq 1 "$(printf '%s' "$got" | jq '.injectSteps | length')" "adapter emits 
 printf '{"version":1,"claude_plan":"pro","codex":"none","gemini":"pro","jules":false,"kimi":false,"glm":false,"paseo":false}\n' > "$d/profile.json"
 got=$(env KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-codex" "$AGY")
 text=$(printf '%s' "$got" | jq -r '.injectSteps[0].systemMessage.systemMessage')
-assert_contains "$text" "gemini-4-argon-high (or the main session)" "adapter forces the Gemini wording"
+assert_contains "$text" "$(routed_model gemini strong) (or the main session)" "adapter forces the Gemini wording"
 case "$text" in *subagent*) fail "adapter text has Claude subagent wording";; *) pass;; esac
 # No profile: still valid JSON, exit 0.
 e=$(mktmp)
@@ -338,6 +339,14 @@ got=$(env -i PATH=/usr/bin:/bin HOME="$e" ROUTING_KIT_HOME="$d" "$AGY")
 printf '%s' "$got" | /usr/bin/python3 -c 'import json,sys; json.load(sys.stdin)' && pass || fail "adapter with a bare PATH: invalid JSON"
 
 # --- degrade by section instead of failing on size ---------------------------
+# Size/fallback cases use fixed model lengths and fallback relationships.
+installed_plugin=$PLUGIN_ROOT
+fixture_plugin=$(mktmp)
+cp -R "$PLUGIN_ROOT/." "$fixture_plugin/"
+RK_TEST_MODELS="$REPO_ROOT/tests/fixtures/routing-table/models.json"
+cp "$RK_TEST_MODELS" "$fixture_plugin/rules/models.json"
+PLUGIN_ROOT=$fixture_plugin
+HOOK="$PLUGIN_ROOT/hooks/session-start"
 BUDGET=9400
 all_profile() { # FILE MAIN
   printf '{"version":1,"claude_plan":"max20","codex":"api","gemini":"ultra","jules":true,"kimi":true,"glm":true,"paseo":true,"main_agent":"%s"}\n' "$2" > "$1"
@@ -348,7 +357,7 @@ mk_notes_home() { # DIR
   mkdir -p "$1/cache" "$1/codex"
   : > "$1/cache/agy-refresh.stamp"
   printf 'gemini-4-argon-high\ngemini-4-hydrogen-medium\ngemini-4-hydrogen-low\ngemini-3.8-flash-medium\n' > "$1/cache/agy-models.txt"
-  printf '%s' '{"models":[{"slug":"gpt-6-sol"},{"slug":"gpt-6.1-terra"},{"slug":"gpt-6-astra"},{"slug":"gpt-6-luna"}]}' > "$1/codex/models_cache.json"
+  routed_codex_list | /usr/bin/jq --arg missing "$(routed_model codex build)" '.models |= map(select(.slug != $missing))' > "$1/codex/models_cache.json"
 }
 for m in claude codex gemini; do
   # Normal case: every lane on, no extra lines: nothing is dropped, within budget.
@@ -366,8 +375,8 @@ for m in claude codex gemini; do
   if [ "$len" -le "$BUDGET" ]; then pass; else fail "$m main, worst case: $len chars, over $BUDGET"; fi
   case "$out" in *"rules did not load"*) fail "$m main, worst case: repair message instead of rules";; *) pass;; esac
   assert_contains "$out" "## Your routing table" "$m main, worst case: table kept"
-  assert_contains "$out" "Note: gpt-6.1-sol is not offered by your codex CLI; using gpt-6-sol." "$m main, worst case: first Note kept"
-  assert_contains "$out" "Note: gemini-4-hydrogen-high is not offered by your gemini CLI and has no usable fallback; leaving it out." "$m main, worst case: second Note kept"
+  assert_contains "$out" "Note: $(routed_model codex build) is not offered by your codex CLI; using gpt-6-sol." "$m main, worst case: first Note kept"
+  assert_contains "$out" "Note: $(routed_model gemini research) is not offered by your gemini CLI and has no usable fallback; leaving it out." "$m main, worst case: second Note kept"
   assert_contains "$out" "Routing guide is " "$m main, worst case: stale line kept"
   assert_contains "$out" "delegating" "$m main, worst case: the other rules kept"
 done
@@ -414,11 +423,15 @@ assert_contains "$out" "routing-kit rules are too long to load; reinstall the ki
 case "$out" in *"rules did not load"*) fail "far too long: bare repair text printed";; *) pass;; esac
 assert_contains "$out" "## Your routing table" "far too long: table kept"
 assert_contains "$out" "| Work | Use |" "far too long: table rows kept"
-assert_contains "$out" "Note: gpt-6.1-sol is not offered by your codex CLI" "far too long: first Note kept"
-assert_contains "$out" "Note: gemini-4-hydrogen-high is not offered" "far too long: second Note kept"
+assert_contains "$out" "Note: $(routed_model codex build) is not offered by your codex CLI" "far too long: first Note kept"
+assert_contains "$out" "Note: $(routed_model gemini research) is not offered" "far too long: second Note kept"
 assert_contains "$out" "Routing guide is " "far too long: stale line kept"
 assert_contains "$out" "Kit commands live in " "far too long: bin line kept"
 [ $(printf '%s' "$out" | wc -c | tr -d ' ') -le "$BUDGET" ] && pass || fail "far too long: output over"
+
+PLUGIN_ROOT=$installed_plugin
+HOOK="$PLUGIN_ROOT/hooks/session-start"
+unset RK_TEST_MODELS
 
 # --- refresh throttle: atomic lock -------------------------------------------
 mk_gem_home() { # sets RK; fresh kit home with a Gemini profile
@@ -580,7 +593,7 @@ out=$(env KIT_GUIDE_TODAY="$GUIDE_DATE" ROUTING_KIT_HOME="$d" CODEX_HOME="$d/no-
 assert_contains "$out" 'Name the model on every worker' "reader claude, profile main codex: subagent rule kept"
 assert_contains "$out" 'delegating' "reader claude, profile main codex: adviser skill kept"
 assert_contains "$out" 'Do small things yourself' "reader claude, profile main codex: private-data work goes to a subagent"
-assert_contains "$out" "gpt-6-astra (or the main session)" "reader claude, profile main codex: main: blocks and table still follow the profile"
+assert_contains "$out" "$(routed_model codex strong) (or the main session)" "reader claude, profile main codex: main: blocks and table still follow the profile"
 case "$out" in *"Hardest builds"*|*"<!--"*) fail "reader claude, main codex: main:claude block or marker leaked";; *) pass;; esac
 bare=$(run_hook "$d")
 case "$bare" in *subagent*|*"Use the \`ask-advisers\` skill."*) fail "bare hook, main codex: Claude-only wording appears";; *) pass;; esac

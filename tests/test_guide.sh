@@ -15,6 +15,32 @@ assert_eq 0 "$code" "real guide.json validates ($out)"
 out=$("$RENDER" --check 2>&1); code=$?
 assert_eq 0 "$code" "FIELD-GUIDE.md matches the render of guide.json ($out)"
 
+# README examples are generated too; surrounding bytes belong to the owner.
+cp "$ROOT/README.md" "$T/README.md"
+python3 - "$T/README.md" <<'PYTEST'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+b = p.read_bytes()
+b = re.sub(rb"(<!-- example:start [^\n]+ -->\n).*?(<!-- example:end -->)",
+           rb"\1stale table\n\2", b, flags=re.S)
+p.write_bytes(b"Owner prefix\r\n" + b + b"Owner suffix\r\n")
+PYTEST
+out=$("$RENDER" --readme "$T/README.md" --check 2>&1); code=$?
+assert_eq 1 "$code" "stale README example fails check ($out)"
+assert_contains "$out" 'README.md' 'stale check names README'
+"$RENDER" --readme "$T/README.md" >/dev/null 2>&1
+assert_eq 0 "$?" 'renderer updates README examples'
+"$RENDER" --readme "$T/README.md" --check >/dev/null 2>&1
+assert_eq 0 "$?" 'rendered README passes check'
+python3 - "$ROOT/README.md" "$T/README.md" <<'PYTEST'
+import pathlib, re, sys
+pattern = rb"(<!-- example:start [^\n]+ -->\n).*?(<!-- example:end -->)"
+def strip(b):
+    return re.sub(pattern, rb"\1\2", b, flags=re.S)
+assert strip(pathlib.Path(sys.argv[2]).read_bytes()) == (b"Owner prefix\r\n" + strip(pathlib.Path(sys.argv[1]).read_bytes()) + b"Owner suffix\r\n")
+PYTEST
+assert_eq 0 "$?" 'renderer preserves every byte outside README blocks'
+
 # --- the fixture is valid, with warnings only for null sources ---------------
 out=$("$VALIDATE" "$FIX/two-model.json" 2>&1); code=$?
 assert_eq 0 "$code" "fixture validates ($out)"

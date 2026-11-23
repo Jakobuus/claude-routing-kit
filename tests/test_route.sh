@@ -103,7 +103,12 @@ cp "$FIX/chatgpt.json" "$launch_home/profile.json"
 out=$(ROUTING_KIT_HOME="$launch_home" "$ROUTE" --guide "$FIX/guide.json" --agent claude images)
 assert_contains "$out" 'Reach it with: KIT_ROLE=worker codex exec --skip-git-repo-check -m ' '5.4c cross agent launch'
 # ---- kit-0.4 media fix wave: runnable reach commands, model follows the option, worker mark, own lane ----
-nocodex=$(mktmp)   # an empty CODEX_HOME: the codex model list is unknown, so no fallback applies
+nocodex=$(mktmp)   # Command and fallback scenarios use fixed role names in their own model fixture.
+route_plugin=$(mktmp)
+cp -R "$ROOT/plugins/routing-kit/." "$route_plugin/"
+cp "$ROOT/tests/fixtures/routing-table/models.json" "$route_plugin/rules/models.json"
+ROUTE="$route_plugin/bin/kit-route"
+# an empty CODEX_HOME: the codex model list is unknown, so no fallback applies
 reach() {  # reach AGENT PROFILE_FILE QUERY [GUIDE]
   local h; h=$(mktmp); cp "$2" "$h/profile.json"
   CODEX_HOME="$nocodex" ROUTING_KIT_HOME="$h" "$ROUTE" ${4:+--guide "$4"} --agent "$1" "$3"

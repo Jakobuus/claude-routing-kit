@@ -3,7 +3,13 @@
 set -u
 cd "$(dirname "$0")"
 
+# RK_TESTS_PRIVATE_TMP=1 (set by the maintainer's refresh gate together with a private TMPDIR): count only
+# TMPDIR, so other test runs on the same machine (sharing /tmp and the home folder) cannot fail this one.
 garbage_count() {
+  if [ "${RK_TESTS_PRIVATE_TMP:-}" = 1 ]; then
+    find "${TMPDIR:-/tmp}" -maxdepth 1 -user "$(id -un)" \( -name 'rk-*' -o -name 'kit-*' \) -print 2>/dev/null
+    return
+  fi
   find "${TMPDIR:-/tmp}" /tmp -maxdepth 1 -user "$(id -un)" \( -name 'rk-*' -o -name 'kit-*' \) -print 2>/dev/null
   find "$HOME" -maxdepth 1 -user "$(id -un)" -name '.routing-kit-canary-*' -print 2>/dev/null
 }

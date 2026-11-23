@@ -11,6 +11,9 @@ missing. Python 3.9 stdlib only.
 
 import argparse
 import os
+import json
+import re
+import subprocess
 import sys
 import tempfile
 from urllib.parse import urlsplit
@@ -243,6 +246,67 @@ def render(data):
     return "\n".join(L).rstrip("\n") + "\n"
 
 
+def render_readme(path, here):
+    """Replace example bodies, retaining every byte of owner text and markers."""
+    with open(path, "rb") as f:
+        original = f.read()
+    lines = original.splitlines(keepends=True)
+    output = []
+    spec = None
+    for line in lines:
+        start = re.fullmatch(rb"<!-- example:start ([^\r\n]+) -->\r?\n", line)
+        end = line.rstrip(b"\r\n") == b"<!-- example:end -->"
+        if start:
+            if spec is not None:
+                raise ValueError("nested README example block")
+            spec = start.group(1).decode("utf-8")
+            output.append(line)
+            profile = {"version": 1, "paseo": False}
+            for pair in spec.split():
+                key, value = pair.split("=", 1)
+                if key in profile:
+                    raise ValueError("duplicate README profile key: " + key)
+                profile[key] = {"true": True, "false": False}.get(value, value)
+            with tempfile.TemporaryDirectory(prefix="guide-example-") as tmp:
+                profile_path = os.path.join(tmp, "profile.json")
+                with open(profile_path, "w", encoding="utf-8") as f:
+                    json.dump(profile, f)
+                env = dict(os.environ, ROUTING_KIT_HOME=tmp, CODEX_HOME=os.path.join(tmp, "codex"))
+                result = subprocess.run(
+                    ["bash", os.path.join(here, "..", "bin", "kit-routing-table"),
+                     "--profile", profile_path], env=env, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, check=True)
+                output.append(result.stdout.rstrip(b"\n") + b"\n")
+        elif end:
+            if spec is None:
+                raise ValueError("README example end without start")
+            spec = None
+            output.append(line)
+        elif spec is None:
+            output.append(line)
+    if spec is not None:
+        raise ValueError("unclosed README example block")
+    return b"".join(output)
+
+
+def write_atomic(path, payload):
+    out_dir = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(prefix=".kit-guide-render.", dir=out_dir)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(payload)
+        mask = os.umask(0)
+        os.umask(mask)
+        os.chmod(tmp, 0o666 & ~mask)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def main(argv):
     here = os.path.dirname(os.path.abspath(__file__))
     guide_dir = os.path.join(here, "..", "guide")
@@ -250,6 +314,7 @@ def main(argv):
     ap.add_argument("--data", default=os.path.join(guide_dir, "guide.json"))
     ap.add_argument("--out", default=os.path.join(guide_dir, "FIELD-GUIDE.md"))
     ap.add_argument("--domains", default=os.path.join(guide_dir, "source-domains.txt"))
+    ap.add_argument("--readme", help="README examples to render (default: repo README for the default guide)")
     ap.add_argument("--check", action="store_true")
     args = ap.parse_args(argv[1:])
     if args.check and args.out == "-":
@@ -272,36 +337,33 @@ def main(argv):
     if args.out == "-":
         sys.stdout.buffer.write(payload)
         return 0
-    if args.check:
+    outputs = [(args.out, payload)]
+    readme = args.readme
+    # Explicit guide inputs/outputs remain useful for standalone fixture renders.
+    if readme is None and not any(a in argv[1:] for a in ("--data", "--out")):
+        candidate = os.path.abspath(os.path.join(here, "..", "..", "..", "README.md"))
+        if os.path.isfile(candidate):
+            readme = candidate
+    if readme is not None:
         try:
-            with open(args.out, "rb") as f:
-                current = f.read()
-        except OSError:
-            sys.stderr.write("kit-guide-render: %s is missing; run kit-guide-render\n" % args.out)
+            outputs.append((readme, render_readme(readme, here)))
+        except (OSError, ValueError, subprocess.CalledProcessError) as e:
+            sys.stderr.write("kit-guide-render: cannot render README examples: %s\n" % e)
             return 1
-        if current != payload:
-            sys.stderr.write("kit-guide-render: %s is out of date; run kit-guide-render\n" % args.out)
-            return 1
-        return 0
-    # A private temp file in the output folder (never a predictable name, never
-    # through a symlink), then an atomic replace. The result gets the mode a
-    # plain open() would have given it.
-    out_dir = os.path.dirname(os.path.abspath(args.out))
-    fd, tmp = tempfile.mkstemp(prefix=".kit-guide-render.", dir=out_dir)
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(payload)
-        mask = os.umask(0)
-        os.umask(mask)
-        os.chmod(tmp, 0o666 & ~mask)
-        os.replace(tmp, args.out)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    return 0
+    stale = False
+    for path, content in outputs:
+        if args.check:
+            try:
+                with open(path, "rb") as f:
+                    current = f.read()
+            except OSError:
+                current = None
+            if current != content:
+                sys.stderr.write("kit-guide-render: %s is out of date; run kit-guide-render\n" % path)
+                stale = True
+        else:
+            write_atomic(path, content)
+    return 1 if stale else 0
 
 
 if __name__ == "__main__":

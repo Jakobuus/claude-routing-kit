@@ -73,7 +73,7 @@ for id in $mentioned; do
 done
 # The bare aliases the table uses must be real entries too.
 for alias in opus sonnet haiku; do
-  if grep -qw -- "$alias" "$README"; then
+  if grep -qE -- "(^|[^-A-Za-z0-9_.])$alias([^-A-Za-z0-9_.]|$)" "$README"; then
     if printf '%s\n' "$known" | grep -qx -- "$alias"; then pass; else fail "docs name alias $alias, not in models.json"; fi
   fi
 done

@@ -340,10 +340,16 @@ def main(argv):
     outputs = [(args.out, payload)]
     readme = args.readme
     # Explicit guide inputs/outputs remain useful for standalone fixture renders.
-    if readme is None and not any(a in argv[1:] for a in ("--data", "--out")):
+    explicit = any(a in ("--data", "--out") or a.startswith(("--data=", "--out=")) for a in argv[1:])
+    if readme is None and not explicit:
         candidate = os.path.abspath(os.path.join(here, "..", "..", "..", "README.md"))
-        if os.path.isfile(candidate):
-            readme = candidate
+        # Only the kit's own README: a file there without example blocks is someone else's.
+        try:
+            with open(candidate, "rb") as f:
+                if b"<!-- example:start " in f.read():
+                    readme = candidate
+        except OSError:
+            pass
     if readme is not None:
         try:
             outputs.append((readme, render_readme(readme, here)))

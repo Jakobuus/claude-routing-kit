@@ -281,6 +281,7 @@ expect_job "F3 summary video" text-to-video "$(ev claude 'Summarize our quarterl
 expect_job "F3 describe video" text-to-video "$(ev claude 'Describe our new app in a 30 second video')"
 expect_job "F3 client pair" text-to-video "$(ev claude 'Make an explainer video for our client/partner onboarding')"
 expect_job "F3 docs pair" image-editing "$(ev claude 'Edit this photo for the docs/blog header')"
+expect_job "GitHub README image" images "$(ev claude 'Create a header image for a GitHub README')"
 
 # ---- 5.3g: the fixed evaluation set (every prompt from the earlier reviews plus our own) ----
 EVAL=$(kit_python3 "$ROOT/tests/media_eval.py" "$ROOT" 2>&1)

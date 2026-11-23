@@ -94,6 +94,10 @@ assert_eq 2 "$(/usr/bin/jq -r .version "$M")" "models.json version 2"
 # The checked date moves with every guide refresh: assert its shape, not a fixed day.
 assert_eq 0 "$(/usr/bin/jq -r .checked "$M" | /usr/bin/grep -Eqx '[0-9]{4}-[0-9]{2}-[0-9]{2}'; echo $?)" "models.json checked date is an ISO date"
 # Required roles and fallback references are validated as data, independent of today's IDs.
+for role in claude.top claude.strong claude.build claude.lookup codex.strong codex.review codex.build codex.screens codex.lookup gemini.strong gemini.build gemini.long_read gemini.mid gemini.lookup gemini.research; do
+  assert_eq 0 "$(/usr/bin/jq -e --arg r "$role" 'getpath($r | split(".")) | strings | length > 0' "$M" >/dev/null 2>&1; echo $?)" "models.json has $role"
+done
+assert_eq 0 "$(/usr/bin/jq -e '.fallbacks[.codex.build] and .fallbacks[.claude.top]' "$M" >/dev/null 2>&1; echo $?)" "fallbacks for codex.build and claude.top"
 assert_exit 0 "routed model roles validate" -- "$REPO_ROOT/plugins/routing-kit/bin/kit-models-validate" "$M" --guide "$REPO_ROOT/plugins/routing-kit/guide/guide.json"
 bad=$(/usr/bin/jq -r '[.claude, .codex, .gemini, .kimi, .glm] | map(del(.base_url, .host)) | .[] | .[] | select(type == "string") | select(test("^[a-z0-9][a-z0-9.-]{2,60}$") | not)' "$M")
 assert_eq "" "$bad" "every model id matches the id pattern"
@@ -112,15 +116,14 @@ assert_eq 11 "$(nrows "$t")" "full profile: exactly 14 rows"
 assert_contains "$t" "$(routed_model codex build)" "full: sol 6.1"
 assert_contains "$t" "$(routed_model codex screens)" "full: terra"
 assert_contains "$t" "$(routed_model claude top)" "full: fable by full id"
-fixture_t=$("$RT" --profile "$p/profile.json" --models "$REPO_ROOT/tests/fixtures/routing-table/models.json")
-case "$fixture_t" in *[Ff]lash*) fail "fixture: unused flash fallback must not appear";; *) pass;; esac
-assert_contains "$t" "| Review | a strong model from another company than the builder: Codex $(routed_model codex strong) · Claude $(routed_model claude strong) · Gemini $(routed_model gemini strong) |" "full: review row"
+case "$t" in *[Ff]lash*) fail "full: flash must not appear";; *) pass;; esac
+assert_contains "$t" "| Review | a strong model from another company than the builder: Codex $(routed_model codex strong) · Claude $(routed_model claude strong) · Gemini $(routed_model gemini long_read) |" "full: review row"
 assert_contains "$t" "| Hardest builds (long unattended, or failed twice) | Claude $(routed_model claude top) |" "full: fable row"
 assert_contains "$t" "Claude $(routed_model claude build)" "full: sonnet"
 assert_not_contains "$t" "medium or high, never above" "full: sonnet effort text"
 assert_not_contains "$t" "at high, never low" "full: luna effort text"
 assert_contains "$t" "| Exploration, big reads, web research | Gemini $(routed_model gemini research)" "full: exploration row (Hydrogen, no Argon)"
-assert_contains "$t" "Gemini $(routed_model gemini strong)" "full: long outputs row"
+assert_contains "$t" "Gemini $(routed_model gemini long_read)" "full: long outputs row"
 assert_contains "$t" "| Screenshots, UI checks | Codex $(routed_model codex screens) |" "full: terra row"
 assert_contains "$t" "| Web pages or email while holding tools that can act | Claude $(routed_model claude strong) |" "full: untrusted row"
 assert_contains "$t" "Codex $(routed_model codex lookup) · Gemini $(routed_model gemini research) · Claude $(routed_model claude lookup)" "full: lookups"

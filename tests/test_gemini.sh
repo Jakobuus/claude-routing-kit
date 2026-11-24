@@ -21,7 +21,7 @@ assert_exit 0 'Gemini profile validates' -- env ROUTING_KIT_HOME="$home" "$KP" v
 assert_exit 2 'Gemini profile rejects invalid plan' -- env ROUTING_KIT_HOME="$home" "$KP" set gemini plus
 rows=$(env CODEX_HOME="$home/no-codex" ROUTING_KIT_HOME="$home" "$RT")
 assert_contains "$rows" "Gemini $(routed_model gemini build)" 'Gemini build row'
-assert_contains "$(printf '%s\n' "$rows" | grep '| Lookups, bulk edits, data entry |')" "Gemini $(routed_model gemini research)" 'Gemini hydrogen in lookup row'
+assert_contains "$(printf '%s\n' "$rows" | grep '| Lookups, bulk edits, data entry |')" "Gemini $(routed_model gemini lookup)" 'Gemini lookup model in lookup row'
 assert_contains "$(printf '%s\n' "$rows" | grep '| Exploration, big reads, web research |')" "Gemini $(routed_model gemini research)" 'Gemini hydrogen in research row'
 assert_contains "$(printf '%s\n' "$rows" | grep '| Review |')" "Gemini $(routed_model gemini long_read)" 'Gemini may review'
 fixture=$(mktmp)/quota.json

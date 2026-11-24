@@ -94,7 +94,7 @@ assert_eq 2 "$(/usr/bin/jq -r .version "$M")" "models.json version 2"
 # The checked date moves with every guide refresh: assert its shape, not a fixed day.
 assert_eq 0 "$(/usr/bin/jq -r .checked "$M" | /usr/bin/grep -Eqx '[0-9]{4}-[0-9]{2}-[0-9]{2}'; echo $?)" "models.json checked date is an ISO date"
 # Required roles and fallback references are validated as data, independent of today's IDs.
-for role in claude.top claude.strong claude.build claude.lookup codex.strong codex.review codex.build codex.screens codex.lookup gemini.strong gemini.build gemini.long_read gemini.mid gemini.lookup gemini.research; do
+for role in claude.top claude.strong claude.build claude.lookup claude.research codex.research codex.strong codex.review codex.build codex.screens codex.lookup gemini.strong gemini.build gemini.long_read gemini.mid gemini.lookup gemini.research; do
   assert_eq 0 "$(/usr/bin/jq -e --arg r "$role" 'getpath($r | split(".")) | strings | length > 0' "$M" >/dev/null 2>&1; echo $?)" "models.json has $role"
 done
 assert_eq 0 "$(/usr/bin/jq -e '.fallbacks[.codex.build] and .fallbacks[.claude.top]' "$M" >/dev/null 2>&1; echo $?)" "fallbacks for codex.build and claude.top"
@@ -126,7 +126,8 @@ assert_contains "$t" "| Exploration, big reads, web research | Gemini $(routed_m
 assert_contains "$t" "Gemini $(routed_model gemini long_read)" "full: long outputs row"
 assert_contains "$t" "| Screenshots, UI checks | Codex $(routed_model codex screens) |" "full: terra row"
 assert_contains "$t" "| Web pages or email while holding tools that can act | Claude $(routed_model claude strong) |" "full: untrusted row"
-assert_contains "$t" "Codex $(routed_model codex lookup) · Gemini $(routed_model gemini research) · Claude $(routed_model claude lookup)" "full: lookups"
+assert_contains "$t" "Codex $(routed_model codex lookup) · Gemini $(routed_model gemini lookup) · Claude $(routed_model claude lookup)" "full: lookups"
+assert_contains "$t" "| Exploration, big reads, web research | Gemini $(routed_model gemini research) · Codex $(routed_model codex research) with web search · Claude $(routed_model claude research) |" "full: exploration uses the research roles, not the build models"
 assert_contains "$t" "Gemini $(routed_model gemini research)" "full: research hydrogen high"
 case "$t" in *"Note:"*) fail "full: no Note without local lists";; *) pass;; esac
 # row order follows the field-guide table
@@ -299,13 +300,25 @@ gk=$(mktmp); mkdir -p "$gk/cache"
 printf 'gemini-4-argon-high\ngemini-4-hydrogen-medium\ngemini-4-hydrogen-high\ngemini-3.8-flash-medium\n' > "$gk/cache/agy-models.txt"
 t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json")
 case "$t" in *gemini-3.8-flash*) fail "no flash fallback when hydrogen-low is missing";; *) pass;; esac
-assert_not_contains "$t" "Note: gemini-4-hydrogen-low" "unused Gemini lookup emits no Note"
+assert_contains "$(row_of "$t" "Lookups")" "Gemini gemini-4-hydrogen-medium" "hydrogen-low missing: lookups step up to hydrogen-medium"
 printf 'gemini-4-argon-high\ngemini-4-hydrogen-medium\ngemini-4-hydrogen-high\ngemini-4-hydrogen-low\n' > "$gk/cache/agy-models.txt"
 t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json")
 case "$t" in *"Note:"*|*flash*) fail "complete gemini list: no Note, no flash";; *) pass;; esac
-/usr/bin/jq '.gemini.lookup = "gemini-unused-lookup"' "$REPO_ROOT/tests/fixtures/routing-table/models.json" > "$p/unused.json"
-t=$(env ROUTING_KIT_HOME="$gk" "$RT" --profile "$p/profile.json" --models "$p/unused.json")
-assert_not_contains "$t" 'gemini-unused-lookup' 'unused Gemini lookup has no Note'
+# Fallback chains: terra -> sol 6.1 -> sol 6 with the shipped data (Astra review 23/11); a circle never hangs.
+cc=$(mktmp); printf '{"models":[{"slug":"gpt-6-sol"},{"slug":"gpt-6-astra"},{"slug":"gpt-6-luna"}]}' > "$cc/models_cache.json"
+printf '{"version":1,"claude_plan":"none","codex":"plus","gemini":"none","jules":false,"kimi":false,"glm":false,"paseo":false,"main_agent":"codex"}' > "$p/chain-profile.json"
+t=$(env CODEX_HOME="$cc" ROUTING_KIT_HOME="$p/no-kit" "$installed_rt" --profile "$p/chain-profile.json")
+assert_contains "$(row_of "$t" "Exploration")" "Codex gpt-6-sol with web search" "research role follows a two-step fallback chain"
+/usr/bin/jq '.fallbacks["gpt-6.1-terra"] = "gpt-6.1-sol" | .fallbacks["gpt-6.1-sol"] = "gpt-6.1-terra"' "$M" > "$p/circle.json"
+t=$(env CODEX_HOME="$cc" ROUTING_KIT_HOME="$p/no-kit" "$installed_rt" --profile "$p/chain-profile.json" --models "$p/circle.json"); code=$?
+assert_eq 0 "$code" "a fallback circle ends"
+assert_contains "$t" "gpt-6.1-terra is not offered by your codex CLI and has no usable fallback" "a circle leaves the model out with a Note"
+
+# An older models file without research roles keeps exploration on the build models.
+/usr/bin/jq 'del(.codex.research, .claude.research)' "$M" > "$p/old.json"
+printf '{"version":1,"claude_plan":"max5","codex":"plus","gemini":"pro","jules":false,"kimi":false,"glm":false,"paseo":false}' > "$p/old-profile.json"
+t=$(env ROUTING_KIT_HOME="$p/no-kit" "$installed_rt" --profile "$p/old-profile.json" --models "$p/old.json")
+assert_contains "$(row_of "$t" "Exploration")" "Codex $(routed_model codex build) with web search" "no research role: exploration falls back to the build model"
 # Exploration row under availability: research missing -> no exploration row (never Argon); long read missing -> research;
 # both missing -> no exploration row.
 printf 'gemini-4-argon-high\ngemini-4-hydrogen-medium\ngemini-4-hydrogen-low\n' > "$gk/cache/agy-models.txt"

@@ -1,6 +1,6 @@
 {
   "name": "routing-kit",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Model routing for Claude Code, Codex or Gemini; optional helpers include Jules and locked-down Kimi/GLM.",
   "license": "MIT"
 }

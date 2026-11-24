@@ -5,14 +5,16 @@
     "top": "claude-fable-5-2",
     "strong": "opus",
     "build": "sonnet",
-    "lookup": "haiku"
+    "lookup": "haiku",
+    "research": "sonnet"
   },
   "codex": {
     "strong": "gpt-6.2-astra",
     "review": "gpt-6.1-sol",
     "build": "gpt-6.1-sol",
     "screens": "gpt-6.1-terra",
-    "lookup": "gpt-6-luna"
+    "lookup": "gpt-6-luna",
+    "research": "gpt-6.1-terra"
   },
   "gemini": {
     "strong": "gemini-4-argon-high",
@@ -41,6 +43,7 @@
     }
   },
   "fallbacks": {
+    "gemini-4-hydrogen-low": "gemini-4-hydrogen-medium",
     "gpt-6.1-sol": "gpt-6-sol",
     "gpt-6.1-terra": "gpt-6.1-sol",
     "claude-fable-5-2": "opus",

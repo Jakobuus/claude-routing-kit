@@ -41,6 +41,7 @@
     }
   },
   "fallbacks": {
+    "gemini-4-hydrogen-low": "gemini-4-hydrogen-medium",
     "gpt-6.1-sol": "gpt-6-sol",
     "gpt-6.1-terra": "gpt-6.1-sol",
     "claude-fable-5-2": "opus"

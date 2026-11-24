@@ -116,11 +116,14 @@ claude_top=$(read_model '.claude.top') || fail_models
 claude_strong=$(read_model '.claude.strong') || fail_models
 claude_build=$(read_model '.claude.build') || fail_models
 claude_lookup=$(read_model '.claude.lookup') || fail_models
+# Exploration has its own role (cheaper than building); an older models file without it uses the build model.
+claude_research=$(read_model '.claude.research') || claude_research="$claude_build"
 codex_strong=$(read_model '.codex.strong') || fail_models
 codex_review=$(read_model '.codex.review') || fail_models
 codex_build=$(read_model '.codex.build') || fail_models
 codex_screens=$(read_model '.codex.screens') || fail_models
 codex_lookup=$(read_model '.codex.lookup') || fail_models
+codex_research=$(read_model '.codex.research') || codex_research="$codex_build"
 if [ "$gemini" != none ]; then
   gemini_strong=$(read_model '.gemini.strong') || fail_models
   gemini_build=$(read_model '.gemini.build') || fail_models
@@ -177,7 +180,15 @@ resolve() {
   esac
   [ "$rc" = 0 ] || return 0
   has_line "$list" "$model" && return 0
-  fb=$(kit_jq -r --arg m "$model" '.fallbacks[$m] // empty' "$MODELS_FILE" 2>/dev/null)
+  # Follow the fallback chain (terra -> sol 6.1 -> sol 6), at most 5 steps, never in a circle.
+  fb="$model"; seen=" $model "; hops=0
+  while [ "$hops" -lt 5 ]; do
+    fb=$(kit_jq -r --arg m "$fb" '.fallbacks[$m] // empty' "$MODELS_FILE" 2>/dev/null)
+    case "$seen" in *" $fb "*) fb="";; esac
+    [ -n "$fb" ] || break
+    has_line "$list" "$fb" && break
+    seen="$seen$fb "; hops=$((hops + 1))
+  done
   if [ -n "$fb" ] && has_line "$list" "$fb"; then
     RESOLVED="$fb"
     add_line_note "Note: $model is not offered by your $lane CLI; using $fb. Check for a kit update."
@@ -187,7 +198,7 @@ resolve() {
   fi
 }
 
-c_top=""; c_strong=""; c_build=""; c_lookup=""
+c_top=""; c_strong=""; c_build=""; c_lookup=""; c_research=""
 if [ "$have_claude" = yes ]; then
   case "$claude_plan" in
     max5|max20|api) resolve claude "$claude_top"; c_top="$RESOLVED" ;;
@@ -195,20 +206,23 @@ if [ "$have_claude" = yes ]; then
   resolve claude "$claude_strong"; c_strong="$RESOLVED"
   resolve claude "$claude_build"; c_build="$RESOLVED"
   resolve claude "$claude_lookup"; c_lookup="$RESOLVED"
+  resolve claude "$claude_research"; c_research="$RESOLVED"
 fi
-x_strong=""; x_build=""; x_screens=""; x_lookup=""
+x_strong=""; x_build=""; x_screens=""; x_lookup=""; x_research=""
 if [ "$have_codex" = yes ]; then
   resolve codex "$codex_strong"; x_strong="$RESOLVED"
   resolve codex "$codex_build"; x_build="$RESOLVED"
   resolve codex "$codex_screens"; x_screens="$RESOLVED"
   resolve codex "$codex_lookup"; x_lookup="$RESOLVED"
+  resolve codex "$codex_research"; x_research="$RESOLVED"
 fi
-g_build=""; g_long=""; g_mid=""; g_research=""
+g_build=""; g_long=""; g_mid=""; g_research=""; g_lookup=""
 if [ "$have_gemini" = yes ]; then
   resolve gemini "$gemini_build"; g_build="$RESOLVED"
   resolve gemini "$gemini_long"; g_long="$RESOLVED"
   resolve gemini "$gemini_mid"; g_mid="$RESOLVED"
   resolve gemini "$gemini_research"; g_research="$RESOLVED"
+  resolve gemini "$gemini_lookup"; g_lookup="$RESOLVED"
 fi
 
 
@@ -257,12 +271,12 @@ fi
 row "Second opinion" "${second:-fresh $m_label $m_strong session}"
 list_reset
 [ -z "$g_research" ] || add_item "Gemini $g_research"
-[ -z "$x_build" ] || add_item "Codex $x_build with web search"
-[ "$MAIN" != claude ] || [ -z "$c_build" ] || add_item "Claude $c_build"
+[ -z "$x_research" ] || add_item "Codex $x_research with web search"
+[ "$MAIN" != claude ] || [ -z "$c_research" ] || add_item "Claude $c_research"
 row "Exploration, big reads, web research" "$LIST"
 list_reset
 [ -z "$x_lookup" ] || add_item "Codex $x_lookup"
-[ -z "$g_research" ] || add_item "Gemini $g_research"
+[ -z "$g_lookup" ] || add_item "Gemini $g_lookup"
 if [ -n "$c_lookup" ]; then
  if [ "$MAIN" = claude ]; then add_item "Claude $c_lookup"; else add_item "Claude $c_lookup (claude -p --model $c_lookup)"; fi
 fi

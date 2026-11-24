@@ -167,6 +167,19 @@ readable retention time is never pruned.
 Blocking hook guards get 10 seconds each. Lines in `hook-errors.log` include timestamps.
 The **Exploration, big reads, web research** row lists available research models.
 
+## What is new in 0.4.5
+
+- **Exploration on cheaper models.** The "Exploration, big reads, web research" row has its own
+  routing roles: Codex Terra with web search and Claude Sonnet, no longer the Codex build model.
+  Quick lookups name each lane's cheapest model (Gemini Hydrogen low instead of Hydrogen high).
+- **Step-downs follow the whole chain.** When your CLI does not offer a routed model, the table names
+  the closest older one it does offer, also two steps down (Terra, then Sol 6.1, then Sol 6).
+
+## What is new in 0.4.4
+
+- **GPT-6.2 Astra** reviews and gives second opinions for Codex (weekly model research, judged
+  against an independent benchmark; GPT-6 Astra stays as its step-down).
+
 ## What is new in 0.4.3
 
 - **Image requests that mention GitHub route to image tools.** "Header image for a GitHub README" no
@@ -234,7 +247,7 @@ of November 2026). The kit builds it from their answers and loads it into every 
 | Features, fixes, tests | Codex gpt-6.1-sol · Claude sonnet |
 | Review | a strong model from another company than the builder: Codex gpt-6.2-astra · Claude opus |
 | Second opinion | Codex gpt-6.2-astra; big calls add Claude opus |
-| Exploration, big reads, web research | Codex gpt-6.1-sol with web search · Claude sonnet |
+| Exploration, big reads, web research | Codex gpt-6.1-terra with web search · Claude sonnet |
 | Lookups, bulk edits, data entry | Codex gpt-6-luna · Claude haiku |
 | UI building | Claude opus |
 | Screenshots, UI checks | Codex gpt-6.1-terra |
@@ -250,7 +263,7 @@ Someone who works in Codex, with ChatGPT Plus and no Claude plan, gets this one:
 | Features, fixes, tests | Codex gpt-6.1-sol |
 | Review | a fresh Codex gpt-6.2-astra session that did not build it |
 | Second opinion | fresh Codex gpt-6.2-astra session |
-| Exploration, big reads, web research | Codex gpt-6.1-sol with web search |
+| Exploration, big reads, web research | Codex gpt-6.1-terra with web search |
 | Lookups, bulk edits, data entry | Codex gpt-6-luna |
 | UI building | Codex gpt-6.1-sol |
 | Screenshots, UI checks | Codex gpt-6.1-terra |

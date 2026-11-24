@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "checked": "2026-11-15",
+  "checked": "2026-11-24",
   "summary": "Claude owns judgment, terminal work and knowledge work. OpenAI owns cheap competent volume. Gemini owns very long context. Fable 5.2 is the strongest model overall (Artificial Analysis Intelligence Index 65), but at max effort it costs $26.54 per index task against $1.27 for GPT-6.1 Sol. Escalate to it; do not default to it.",
   "headline_benches": [
     "Terminal-Bench 4.0",

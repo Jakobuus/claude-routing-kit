@@ -8,7 +8,7 @@
     "lookup": "haiku"
   },
   "codex": {
-    "strong": "gpt-6-astra",
+    "strong": "gpt-6.2-astra",
     "review": "gpt-6.1-sol",
     "build": "gpt-6.1-sol",
     "screens": "gpt-6.1-terra",
@@ -23,15 +23,28 @@
     "research": "gemini-4-hydrogen-high"
   },
   "effort": {
-    "claude-fable-5-2": {"use": "high", "max": "high"},
-    "opus": {"use": "medium", "max": "high"},
-    "sonnet": {"use": "medium", "max": "high"},
-    "gpt-6-luna": {"use": "high", "min": "high"}
+    "claude-fable-5-2": {
+      "use": "high",
+      "max": "high"
+    },
+    "opus": {
+      "use": "medium",
+      "max": "high"
+    },
+    "sonnet": {
+      "use": "medium",
+      "max": "high"
+    },
+    "gpt-6-luna": {
+      "use": "high",
+      "min": "high"
+    }
   },
   "fallbacks": {
     "gpt-6.1-sol": "gpt-6-sol",
     "gpt-6.1-terra": "gpt-6.1-sol",
-    "claude-fable-5-2": "opus"
+    "claude-fable-5-2": "opus",
+    "gpt-6.2-astra": "gpt-6-astra"
   },
   "kimi": {
     "build": "kimi-k2.7-code",
@@ -82,13 +95,26 @@
     },
     "kimi-k2.7-code": {
       "price_in_per_mtok": 0.95,
-      "price_out_per_mtok": 4.00
+      "price_out_per_mtok": 4.0
     },
     "glm-5.3": {
-      "price_in_per_mtok": 1.40,
-      "price_out_per_mtok": 4.40
+      "price_in_per_mtok": 1.4,
+      "price_out_per_mtok": 4.4
     }
   },
-  "trials": {"gemini-4-argon-high": {"runs": 5, "ledger": "trials.tsv"}, "gpt-6.1-terra": {"runs": 5, "ledger": "trials.tsv"}, "jules": {"runs": 5, "ledger": "trials.tsv"}},
+  "trials": {
+    "gemini-4-argon-high": {
+      "runs": 5,
+      "ledger": "trials.tsv"
+    },
+    "gpt-6.1-terra": {
+      "runs": 5,
+      "ledger": "trials.tsv"
+    },
+    "jules": {
+      "runs": 5,
+      "ledger": "trials.tsv"
+    }
+  },
   "pricing_checked": "2026-09-29, providers pricing pages; cached input is billed at the full input price here, so spend is an upper estimate"
 }

@@ -232,8 +232,8 @@ of November 2026). The kit builds it from their answers and loads it into every 
 |---|---|
 | Plans, architecture, judgment | Claude opus (or the main session) |
 | Features, fixes, tests | Codex gpt-6.1-sol · Claude sonnet |
-| Review | a strong model from another company than the builder: Codex gpt-6-astra · Claude opus |
-| Second opinion | Codex gpt-6-astra; big calls add Claude opus |
+| Review | a strong model from another company than the builder: Codex gpt-6.2-astra · Claude opus |
+| Second opinion | Codex gpt-6.2-astra; big calls add Claude opus |
 | Exploration, big reads, web research | Codex gpt-6.1-sol with web search · Claude sonnet |
 | Lookups, bulk edits, data entry | Codex gpt-6-luna · Claude haiku |
 | UI building | Claude opus |
@@ -246,10 +246,10 @@ Someone who works in Codex, with ChatGPT Plus and no Claude plan, gets this one:
 <!-- example:start claude_plan=none codex=plus gemini=none jules=false kimi=false glm=false main_agent=codex -->
 | Work | Use |
 |---|---|
-| Plans, architecture, judgment | Codex gpt-6-astra (or the main session) |
+| Plans, architecture, judgment | Codex gpt-6.2-astra (or the main session) |
 | Features, fixes, tests | Codex gpt-6.1-sol |
-| Review | a fresh Codex gpt-6-astra session that did not build it |
-| Second opinion | fresh Codex gpt-6-astra session |
+| Review | a fresh Codex gpt-6.2-astra session that did not build it |
+| Second opinion | fresh Codex gpt-6.2-astra session |
 | Exploration, big reads, web research | Codex gpt-6.1-sol with web search |
 | Lookups, bulk edits, data entry | Codex gpt-6-luna |
 | UI building | Codex gpt-6.1-sol |

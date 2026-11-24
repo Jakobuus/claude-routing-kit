@@ -37,6 +37,7 @@ On independent scores the top cluster is Fable 5.2, Gemini 4 Carbon, Opus 5.5 an
 | Gemini 4 Argon | 2 / 10 (rises to 4 / 20 from 1 Dec) | 57.6% | 1634 | Whole-repo reads over 300K tokens; very long single outputs; read-only questions |
 | Gemini 4 Hydrogen | 1.50 / 7.50 (third-party figure) | 54.0% | – | Cheap read-only search, triage and summaries on Google quota |
 | Gemini 3.8 Flash | 0.75 / 3.75 (until 31 Dec 2026) | 19.7% | 1442 | Skip it; Gemini 4 Hydrogen replaces it |
+| gpt-6.2-astra | – | – | – | Newly listed, not yet assessed |
 
 ## Anthropic Claude family
 
@@ -270,6 +271,10 @@ Cons:
 
 - Low effort is useless for agents (DeepSWE 2.4%).
 - Factual error rate is nearly double Astra's (7.6% vs 3.9%) and hallucination rate on AA-Omniscience is 79.3%. Keep it on tasks a script or a test can check.
+
+### gpt-6.2-astra (2026-11-17) · gpt-6.2-astra
+
+Use for: Newly listed, not yet assessed
 
 ## Google Gemini family (via Antigravity)
 

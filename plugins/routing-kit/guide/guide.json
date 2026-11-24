@@ -964,6 +964,18 @@
           "source": null
         }
       ]
+    },
+    {
+      "id": "gpt-6.2-astra",
+      "family": "codex",
+      "name": "gpt-6.2-astra",
+      "released": "2026-11-17",
+      "price_in": null,
+      "price_out": null,
+      "use_for": "Newly listed, not yet assessed",
+      "scores": [],
+      "pros": [],
+      "cons": []
     }
   ],
   "best_at_note": "Claude wins most coding and knowledge-work categories. Gemini wins long context, automation and injection resistance. OpenAI wins cost per task and cross-file review. Confidence is low wherever only the vendor ran the test.",

@@ -162,15 +162,21 @@ while True:
     cause = 'timeout' if now - start >= deadline else 'idle' if now - last >= idle else ''
     if cause:
         break
-try:
-    os.killpg(pid, signal.SIGTERM)
-except ProcessLookupError:
-    sys.exit(0)
+# The note comes first: the moment agy dies, the script stops this watchdog, and a note written
+# after the kill could be lost (the run then read as "agy failed (exit 143)" instead of idle/timeout).
 try:
     with open(sys.argv[3], "w") as note:
         note.write(cause)
 except OSError:
     pass
+try:
+    os.killpg(pid, signal.SIGTERM)
+except ProcessLookupError:
+    try:
+        os.unlink(sys.argv[3])  # agy had already ended on its own: no stop to report
+    except OSError:
+        pass
+    sys.exit(0)
 time.sleep(0.3)
 try:
     os.killpg(pid, signal.SIGKILL)

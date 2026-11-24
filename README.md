@@ -166,6 +166,11 @@ readable retention time is never pruned.
 Blocking hook guards get 10 seconds each. Lines in `hook-errors.log` include timestamps.
 The **Exploration, big reads, web research** row lists available research models.
 
+## What is new in 0.4.8
+
+- **Gemini builds stopped for being idle are reported as idle.** Before, such a run could be
+  recorded as "agy failed (exit 143)".
+
 ## What is new in 0.4.7
 
 - **Codex, Gemini and Jules builds have the same access as Claude.** No secret scan stops a build

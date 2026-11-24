@@ -9,7 +9,6 @@ kit_require_jq
 kit_require_python3
 . "$BIN_DIR/../lib/export.sh"
 . "$BIN_DIR/../lib/ledger.sh"
-. "$BIN_DIR/../lib/secret-scan.sh"
 REPO='' NAME='' BRIEF='' MODEL='' EFFORT='' TIMEOUT=1800
 usage() { kit_die 2 'usage: kit-gemini-build --repo DIR --name NAME --brief FILE [--model ID] [--effort E] [--timeout SECS]'; }
 while [ $# -gt 0 ]; do
@@ -102,44 +101,25 @@ wt="$run_dir/wt"
 run_claim "$run_dir"
 rm -rf "$run_dir/git.pristine" || kit_die 4 'could not remove saved git directory'
 [ ! -e "$run_dir/git.pristine" ] || kit_die 4 'saved git directory remains'
-if ! secret_scan --credentials-only "$BRIEF" > "$run_dir/secret-scan-brief-name.txt" 2>&1; then
-  cat "$run_dir/secret-scan-brief-name.txt" >&2
-  kit_die 5 'secret scan found a possible secret in the brief'
-fi
 cp "$BRIEF" "$run_dir/brief.md" || kit_die 2 'could not snapshot brief'
 brief_bytes=$(wc -c < "$run_dir/brief.md" | tr -d ' ')
 if [ "$brief_bytes" -gt 102400 ]; then kit_die 2 'brief exceeds 100 KB limit'; fi
-if ! secret_scan --credentials-only "$wt" "$run_dir/brief.md" > "$run_dir/secret-scan.txt" 2>&1; then
-  cat "$run_dir/secret-scan.txt" >&2
-  kit_die 5 'secret scan found a possible secret'
-fi
+# Gemini has the same access as Claude (owner's ruling).
 prompt=$(cat "$run_dir/brief.md")
 # From here on the copy may hold agy's work: it is deleted only when that work is saved (lib/export.sh).
 run_agent_started "$run_dir" || kit_die 4 'could not mark the run as started'
 # agy runs without a sandbox or permission prompts for unattended builds.
 # Job control gives agy and its children their own process group.
 set -m
-# agy runs under the user's own account and login, but not with the caller's whole
-# environment: only an allowlist goes through (HOME, PATH, TERM, TMPDIR, USER,
-# LOGNAME, SHELL, LANG, LC_*, XDG_{CONFIG,DATA,CACHE,STATE}_HOME, and agy's own
-# ANTIGRAVITY_*/AGY_* variables; plus
-# KIT_AGY_* for the test suite). Anything that looks like a credential (*TOKEN*,
-# *KEY*, *SECRET*, *PASSWORD*, GH_*, GITHUB_*, SSH_AUTH_SOCK, AWS_*) is dropped
-# even when its name would otherwise be allowed. DBUS_SESSION_BUS_ADDRESS and
-# XDG_RUNTIME_DIR (the user's session bus, and with it the desktop keyring) are
-# dropped too unless the caller sets KIT_AGY_ALLOW_DBUS=1 (never forwarded itself). Inherited file descriptors above
-# 2 are closed.
+# agy runs under the user's own account with the caller's environment, like a Claude session: every exported
+# variable goes through except the caller's own Claude session variables (CLAUDE_CONFIG_DIR stays) and
+# KIT_ROLE, which is set to worker below. Inherited file descriptors above 2 are closed.
 agy_env=()
 for var_name in $(compgen -v); do
   case "$var_name" in
-    KIT_AGY_ALLOW_DBUS) continue ;;
-    HOME|PATH|TERM|TMPDIR|USER|LOGNAME|SHELL|LANG|LC_*|ANTIGRAVITY_*|AGY_*|KIT_AGY_*) ;;
-    XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_CACHE_HOME|XDG_STATE_HOME) ;;
-    DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR) [ "${KIT_AGY_ALLOW_DBUS:-}" = 1 ] || continue ;;
-    *) continue ;;
-  esac
-  case "$var_name" in
-    *TOKEN*|*KEY*|*SECRET*|*PASSWORD*|GH_*|GITHUB_*|SSH_AUTH_SOCK|AWS_*) continue ;;
+    KIT_AGY_ALLOW_DBUS|KIT_ROLE) continue ;;
+    CLAUDE_CONFIG_DIR) ;;
+    CLAUDE*) continue ;;  # a Claude session's own variables would confuse a nested Claude call
   esac
   export_check=$(export -p | grep -c "^declare -x $var_name=")
   [ "$export_check" -gt 0 ] || continue

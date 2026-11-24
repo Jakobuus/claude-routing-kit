@@ -100,8 +100,8 @@ saved (see kit-retained). The checked build is also kept as the branch `refs/hea
 source repo. Every exit after the run folder exists ends with
 `kit-codex-build: exit=N patch=PATH result=PATH`. A commit you make in the repo while a build
 runs does not break it. A Paseo run also keeps a short-lived `head-*` copy in the kit home, which a
-later run removes if it is more than a day old. The brief is copied first, and that copy is scanned
-and sent. Verified once with a real Paseo run: a `CLAUDE_*` variable exported by the caller did
+later run removes if it is more than a day old. The brief is copied first, and that copy is sent.
+Verified once with a real Paseo run: a `CLAUDE_*` variable exported by the caller did
 not reach the agent.
 
 | Flag, setting or exit | Meaning |
@@ -115,7 +115,6 @@ not reach the agent.
 | Exit 2 | Bad input. |
 | Exit 3 | Missing provider or required tool. |
 | Exit 4 | Provider or cleanup error, including an unsafe copy. |
-| Exit 5 | Secret scan refused the build. |
 | Exit 6 | Waiting on permission; the agent is left running and its copy is kept in place. |
 | Exit 124 | Timeout. |
 
@@ -166,6 +165,12 @@ readable retention time is never pruned.
 
 Blocking hook guards get 10 seconds each. Lines in `hook-errors.log` include timestamps.
 The **Exploration, big reads, web research** row lists available research models.
+
+## What is new in 0.4.7
+
+- **Codex, Gemini and Jules builds have the same access as Claude.** No secret scan stops a build
+  because a file like `.env.example` looks like it holds a key, and Gemini gets your normal
+  environment. Kimi and GLM stay locked in the Mac's sandbox and keep their scan.
 
 ## What is new in 0.4.5
 
@@ -349,11 +354,10 @@ Linux has no equivalent the kit trusts yet, so Kimi and GLM are not offered ther
 - Codex runs without a sandbox or approval prompts, with
   `--dangerously-bypass-approvals-and-sandbox`.
 - Gemini runs under your own Google account and login, without a sandbox or permission prompts,
-  with `--dangerously-skip-permissions`. Its environment is scrubbed: your shell's tokens and keys
-  are not passed on. Codex and Gemini builds use fresh clones, and patches come from private
-  snapshots taken after the helpers stop. Review their patches. On Linux, if a Gemini build
-  reports that agy is not signed in, run it with `KIT_AGY_ALLOW_DBUS=1`, which lets agy reach the
-  desktop keyring.
+  with `--dangerously-skip-permissions`. It receives your exported environment except
+  the caller's Claude session variables; `CLAUDE_CONFIG_DIR` stays and `KIT_ROLE=worker`.
+  Codex and Gemini have the same access as Claude. Builds use fresh clones, and patches come
+  from private snapshots taken after the helpers stop. Review their patches.
 - In 0.2.4, a profile without a `codex` key no longer loads the Codex rules, matching its routing table.
 - Google shuts Jules down on 31 Dec 2026. Jules users should move to Gemini; Jules support remains until then.
 

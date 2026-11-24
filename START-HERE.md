@@ -339,11 +339,10 @@ Read them the ones that apply to what they chose, in plain words.
 - **Codex runs without a sandbox or approval prompts**, with
   `--dangerously-bypass-approvals-and-sandbox`.
 - **Gemini runs under the user's own Google account and login, without a sandbox or permission
-  prompts**, with `--dangerously-skip-permissions`. Its environment is scrubbed: their shell's
-  tokens and keys are not passed on. Codex and Gemini builds use fresh clones, and patches come
-  from private snapshots taken after the helpers stop. Review their patches. On Linux, if a
-  Gemini build reports that agy is not signed in, run it with `KIT_AGY_ALLOW_DBUS=1`, which lets
-  agy reach the desktop keyring.
+  prompts**, with `--dangerously-skip-permissions`. It receives their exported environment except
+  the caller's Claude session variables; `CLAUDE_CONFIG_DIR` stays and `KIT_ROLE=worker`.
+  Codex and Gemini have the same access as Claude. Builds use fresh clones, and patches come
+  from private snapshots taken after the helpers stop. Review their patches.
 - **While a Kimi or GLM job runs, the model could read the command lines of your other running
   programs (not files, not keys), so don't have passwords or tokens typed into command lines
   then.**

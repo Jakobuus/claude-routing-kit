@@ -158,37 +158,39 @@ env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
   "$BIN" --repo "$src" --name myrun --brief "$brief" --model gpt-6-luna >/dev/null
 assert_contains "$(cat "$argv_log")" "-m gpt-6-luna" "explicit --model is passed through"
 
-# --- P1: a secret in the brief refuses the run. It's caught by the
-# original-path scan (content rules apply regardless of filename), which
-# runs before anything is copied anywhere. --------------------------------
-src=$(mk_src_repo)
-d=$(mktmp)
-k="sk-""ant-api03-$(printf 'A%.0s' {1..24})"
-printf 'notes\n\nkey: %s\n' "$k" > "$d/brief.md"
-home=$(mktmp)
-fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
-out=$(env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
-  "$BIN" --repo "$src" --name secrun --brief "$d/brief.md" 2>&1)
-code=$?
-assert_eq 5 "$code" "secret in the brief refuses the run"
-
-# --- finding 4: the secret-scan refusal above still writes one ledger line.
-# Checked right here, against secrun's own $home, before any other run
-# below gets a fresh home of its own -- reusing $home for a later run would
-# make this assertion inspect that later run's ledger instead, and a real
-# regression that drops the ledger write on exit 5 would slip past it. -----
-ledger="$home/ledger.tsv"
-if [ -f "$ledger" ]; then
-  lines=$(grep -c $'\tcodex\t' "$ledger")
-  assert_eq 1 "$lines" "secret-scan refusal still writes exactly one ledger line"
-else
-  fail "ledger.tsv was not created for the secret-scan refusal"
-fi
+# Reintroducing credential scans must fail these acceptance cases.
+for access_case in repo brief env-name; do
+  src=$(mk_src_repo)
+  brief=$(mk_brief)
+  key="sk-""ant-api03-$(printf 'A%.0s' {1..24})"
+  case "$access_case" in
+    repo)
+      printf 'API_KEY=%s\n' "$key" > "$src/.env.example"
+      git -C "$src" add .env.example
+      git -C "$src" commit -qm 'add example configuration' ;;
+    brief) printf 'key: %s\n' "$key" >> "$brief" ;;
+    env-name)
+      brief="$(mktmp)/.env"
+      printf 'create hello.txt containing hi\n' > "$brief" ;;
+  esac
+  home=$(mktmp)
+  argv_log="$(mktmp)/argv.log"
+  fakebin=$(mk_fake_codex_bin "$argv_log")
+  env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
+    "$BIN" --repo "$src" --name "access-$access_case" --brief "$brief" >/dev/null 2>&1
+  assert_eq 0 "$?" "$access_case: Codex starts with the caller's access"
+  [ -s "$argv_log" ] && pass || fail "$access_case: Codex was not started"
+  run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d | head -1)
+  [ -s "$run_dir/build.patch" ] && grep -q hello.txt "$run_dir/build.patch" && pass || fail "$access_case: no build patch"
+  [ -z "$(find "$home" -name 'secret-scan*.txt')" ] && pass || fail "$access_case: scan report written"
+  assert_eq 1 "$(grep -c $'\tcodex\t' "$home/ledger.tsv")" "$access_case: one ledger line"
+  assert_eq 0 "$(tail -1 "$home/ledger.tsv" | cut -f7)" "$access_case: successful ledger exit"
+done
 
 # --- P1: on a clean run, the run dir still holds a brief snapshot whose
 # content matches the original exactly -- that snapshot, not a fresh
-# re-read of the original, is what a passing scan goes on to send. Uses its
-# own $snap_home so it can't be confused with secrun's ledger above. -------
+# re-read of the original, is what Codex receives. Uses its
+# own $snap_home so it cannot be confused with the acceptance cases above.
 src=$(mk_src_repo)
 brief=$(mk_brief)
 snap_home=$(mktmp)
@@ -286,25 +288,6 @@ else
   pass
 fi
 
-# --- re-review P1: a filename-only secret rule (.env) must still fire even
-# though the brief gets snapshotted to a fixed "brief.md" name. A rename
-# without also checking the original name would let a mislabeled secret
-# file through. ---------------------------------------------------------
-src=$(mk_src_repo)
-d=$(mktmp)
-printf 'VENDOR_TOKEN=opaque-value\n' > "$d/.env"
-home=$(mktmp)
-fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
-env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
-  "$BIN" --repo "$src" --name envrun --brief "$d/.env" >/tmp/rk-test-codex-env-out.$$ 2>&1
-code=$?
-rm -f /tmp/rk-test-codex-env-out.$$
-if [ "$code" -eq 5 ]; then
-  pass
-else
-  fail "a .env-named brief must be refused by the filename rule (got exit $code)"
-fi
-
 # --- re-review P2: a ledger write failure (KIT_HOME can't be created) must
 # never mask the real exit code. The trap has to isolate ledger_append's
 # own kit_die/exit, or a failed ledger write for a missing-codex run would
@@ -318,61 +301,6 @@ out=$(env PATH="$emptybin:/usr/bin:/bin" ROUTING_KIT_HOME="$badhome" \
 code=$?
 assert_eq 3 "$code" "a ledger write failure must not mask the real (missing-codex) exit code"
 assert_contains "$out" "codex login" "the missing-codex message still comes through"
-
-# --- lockdown fix wave 1, item 25: a fake `cp` earlier on PATH that plants a
-# secret in the brief snapshot must be caught by the SECOND secret_scan
-# (the one over the run dir's brief.md), not just the first (over the
-# original --brief path). Every secret in the ORIGINAL file is already
-# caught by the first scan, so deleting the second scan would still pass a
-# test that only ever put the secret in the original -- this test puts it
-# in the snapshot instead, after the copy, so only the second scan can see
-# it. ---------------------------------------------------------------------
-mk_fake_cp_bin_plants_secret() {
-  bindir=$(mktmp)
-  cat > "$bindir/cp" <<'EOF'
-#!/bin/bash
-/bin/cp "$@"
-dest=""
-for a in "$@"; do dest="$a"; done
-printf 'sk-''ant-api03-%s\n' "AAAAAAAAAAAAAAAAAAAAAAAA" >> "$dest"
-EOF
-  chmod +x "$bindir/cp"
-  echo "$bindir"
-}
-src=$(mk_src_repo)
-brief=$(mk_brief)
-cphome=$(mktmp)
-fakecpbin=$(mk_fake_cp_bin_plants_secret)
-fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
-out=$(env PATH="$fakecpbin:$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$cphome" \
-  "$BIN" --repo "$src" --name cprun --brief "$brief" 2>&1)
-code=$?
-assert_eq 5 "$code" "a secret planted into the snapshot (after the original-file scan) is still caught"
-run_dir=$(find "$cphome/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
-if [ -n "$run_dir" ] && [ -f "$run_dir/secret-scan.txt" ] && [ -s "$run_dir/secret-scan.txt" ]; then
-  pass
-else
-  fail "the second secret scan (over the run dir's snapshot) did not run or found nothing"
-fi
-
-# --- item 25: the refusal above writes a ledger line whose exit COLUMN is
-# 5, not just some line mentioning "codex" (a bug that always logged exit
-# 0, or blank, would still pass a line-count-only check). -------------------
-ledger="$cphome/ledger.tsv"
-if [ -f "$ledger" ]; then
-  ledger_line=$(grep $'\tcodex\t' "$ledger")
-  ledger_exit=$(printf '%s\n' "$ledger_line" | cut -f7)
-  assert_eq 5 "$ledger_exit" "the snapshot-secret refusal's ledger line has exit column 5"
-else
-  fail "ledger.tsv was not created for the snapshot-secret refusal"
-fi
-
-# Trusted account: contact details pass, credentials still fail.
-src=$(mk_src_repo); brief=$(mk_brief); home=$(mktmp); fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
-printf 'write for someone''@example.org under /Us''ers/example/project\n' >> "$brief"
-assert_exit 0 "contact details pass Codex credential scan" -- env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" "$BIN" --repo "$src" --name contact --brief "$brief"
-printf 'token sk-''abcdefgh1234\n' >> "$brief"
-assert_exit 5 "API key fails Codex credential scan" -- env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$(mktmp)" "$BIN" --repo "$src" --name secret --brief "$brief"
 
 authbin=$(mktmp)
 printf '#!/bin/bash\necho "not logged in"\nexit 1\n' > "$authbin/codex"; chmod +x "$authbin/codex"
@@ -429,8 +357,7 @@ code=$?
 assert_eq 3 "$code" "codex build exits 3 when jq is missing"
 assert_contains "$out" "install jq" "codex build gives the install-jq hint, not a generic models-file error"
 
-# --- a missing python3 exits 3 with an install hint, not a false
-# "possible secret" refusal (exit 5) from the secret scan. -----------------
+# --- a missing python3 exits 3 with an install hint. -----------------
 src=$(mk_src_repo)
 brief=$(mk_brief)
 home=$(mktmp)
@@ -439,7 +366,7 @@ out=$(env KIT_TEST_NO_PYTHON3=1 PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="
   "$BIN" --repo "$src" --name nopy3run --brief "$brief" 2>&1)
 code=$?
 assert_eq 3 "$code" "codex build exits 3 when python3 is missing"
-assert_contains "$out" "install python3" "codex build gives the install-python3 hint, not a false secret-scan refusal"
+assert_contains "$out" "install python3" "codex build gives the install-python3 hint, without a misleading downstream error"
 
 # === the repo copy is deleted when the run ends ===============================
 # bulk_gone RUN_DIR LABEL -- wt, home, cfg and tmp are all gone.
@@ -494,7 +421,7 @@ else
   assert_contains "$out" "kit-codex-build: run dir: $run_dir" "cleanup: run dir line unchanged"
   assert_contains "$out" "next: git apply --index $run_dir/build.patch, run the checks, have the diff reviewed, commit" "successful build gives the next step"
   assert_contains "$out" "kit-codex-build: build patch: $run_dir/build.patch" "cleanup: the patch path is printed"
-  for keep in brief.md codex-output.txt secret-scan.txt; do
+  for keep in brief.md codex-output.txt; do
     if [ -f "$run_dir/$keep" ]; then pass; else fail "cleanup: $keep should survive in the run dir"; fi
   done
 fi
@@ -514,22 +441,6 @@ run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -
 if [ -f "$run_dir/wt/hello.txt" ] && [ -f "$run_dir/build.patch" ]; then pass; else fail "keep-runs: ROUTING_KIT_KEEP_RUNS=1 did not keep wt"; fi
 assert_contains "$out" "ROUTING_KIT_KEEP_RUNS=1" "keep-runs: one-line note about the kept copy"
 assert_contains "$out" "$run_dir/wt" "keep-runs: the note says where the copy is"
-
-# --- a secret-scan refusal (exit 5): copy deleted, exit code and ledger unchanged ---
-src=$(mk_src_repo)
-printf 'SECRET=plain-value\n' > "$src/.env"
-git -C "$src" add .env
-git -C "$src" commit -q -m "add env"
-brief=$(mk_brief)
-home=$(mktmp)
-fakebin=$(mk_fake_codex_bin "$(mktmp)/argv.log")
-env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
-  "$BIN" --repo "$src" --name cleanscan --brief "$brief" >/dev/null 2>&1
-code=$?
-assert_eq 5 "$code" "cleanup: a secret-scan refusal still exits 5"
-run_dir=$(find "$home/runs" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
-if [ -z "$run_dir" ]; then fail "cleanup: no run dir found for the refusal"; else bulk_gone "$run_dir" "cleanup: secret-scan refusal"; fi
-assert_eq 5 "$(grep $'\tcodex\t' "$home/ledger.tsv" | tail -1 | cut -f7)" "cleanup: the refusal's ledger line still says exit 5"
 
 # --- a provider failure (codex exits 1): exit 4, copy deleted, one ledger line ---
 src=$(mk_src_repo)
@@ -1327,19 +1238,6 @@ else
   fail "a finished direct build deletes its copy once build.patch is saved and checked"
 fi
 assert_contains "$(printf '%s\n' "$out" | tail -1)" "exit=0 patch=$run_dir/build.patch" "last line of a direct build is unchanged"
-# A run refused before Codex is started leaves nothing behind: that copy is only HEAD.
-home=$(mktmp)
-k="sk-""ant-api03-$(printf 'A%.0s' {1..24})"
-printf 'notes\n\nkey: %s\n' "$k" > "$d/secret-brief.md"
-env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
-  "$BIN" --repo "$src" --name notstarted --brief "$d/secret-brief.md" >/dev/null 2>&1
-assert_eq 5 "$?" "secret refusal before the agent starts"
-if [ -z "$(find "$home/runs" -mindepth 2 -maxdepth 2 -name wt 2>/dev/null)" ] && [ -z "$(ls -A "$home/retained" 2>/dev/null)" ]; then
-  pass
-else
-  fail "a copy no agent was started in is deleted, not retained"
-fi
-
 # Review finding 1 (direct): Codex writes work, makes staging refuse, and forges the run dir's
 # marks ("not started" recreated, "started" removed). There is no patch; the copy must survive.
 forgebin=$(mktmp)

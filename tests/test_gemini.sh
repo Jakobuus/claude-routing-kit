@@ -159,7 +159,7 @@ sleep 3
 [ ! -f "$quota_marker" ] && pass || fail 'quota timeout killed agy child'
 printf 'dirty\n' >> "$repo/a.txt"
 assert_exit 2 'dirty repo refused' -- env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" "$BIN" --repo "$repo" --name dirty --brief "$brief"
-# --- release review: agy starts with an allowlisted environment --------------
+# --- agy inherits exported variables except the caller's Claude session --------------
 envmark=$(mktmp)/env.txt
 erepo=$(mktmp)
 git -C "$erepo" init -q; git -C "$erepo" config user.email you@example.com; git -C "$erepo" config user.name test
@@ -172,21 +172,28 @@ env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" KIT_AGY_CASE=env KIT_AGY_MARKER
   TMPDIR="${TMPDIR:-/tmp}" LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 TERM=xterm-256color ANTIGRAVITY_HOME=/x/agy AGY_FLAG=1 \
   MY_SERVICE_TOKEN=t0k GITHUB_TOKEN=gh1 GH_HOST=h GITHUB_ACTOR=a AWS_ACCESS_KEY_ID=a1 AWS_REGION=r \
   SSH_AUTH_SOCK=/tmp/sock OPENAI_API_KEY=k1 SOME_SECRET=s1 ANTIGRAVITY_API_KEY=agykey UNRELATED_VAR=u1 \
+  CLAUDECODE=1 CLAUDE_CODE_SESSION_ID=caller CLAUDE_CODE_TEST=caller CLAUDE_CONFIG_DIR=/x/claude KIT_ROLE=lead \
   "$BIN" --repo "$erepo" --name envscrub --brief "$brief" >"$envmark.out" 2>&1
 code=$?
 exec 9>&-
-assert_eq 0 "$code" "build with a scrubbed environment succeeds ($(head -c 400 "$envmark.out"))"
+assert_eq 0 "$code" "build with the caller environment succeeds ($(head -c 400 "$envmark.out"))"
 assert_contains "$(cat "$envmark")" "KIT_ROLE=worker" "Gemini worker role"
 seen=$(cat "$envmark")
 for var in DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR MY_SERVICE_TOKEN GITHUB_TOKEN GH_HOST GITHUB_ACTOR AWS_ACCESS_KEY_ID AWS_REGION SSH_AUTH_SOCK OPENAI_API_KEY SOME_SECRET ANTIGRAVITY_API_KEY UNRELATED_VAR; do
-  case "$seen" in *"$var="*) fail "agy inherited $var" ;; *) pass ;; esac
+  case "$seen" in *"$var="*) pass ;; *) fail "agy did not inherit $var" ;; esac
 done
 for var in HOME PATH LANG LC_ALL TERM ANTIGRAVITY_HOME AGY_FLAG TMPDIR XDG_CONFIG_HOME XDG_DATA_HOME XDG_CACHE_HOME XDG_STATE_HOME; do
   case "$seen" in *"$var="*) pass ;; *) fail "agy did not get $var" ;; esac
 done
+for pair in AWS_ACCESS_KEY_ID=a1 SSH_AUTH_SOCK=/tmp/sock OPENAI_API_KEY=k1 UNRELATED_VAR=u1 CLAUDE_CONFIG_DIR=/x/claude; do
+  assert_contains "$seen" "$pair" "agy preserves $pair"
+done
+for var in CLAUDECODE CLAUDE_CODE_SESSION_ID CLAUDE_CODE_TEST; do
+  case "$seen" in *"$var="*) fail "agy inherited caller session $var" ;; *) pass ;; esac
+done
 case "$seen" in *OPENFD*) fail "agy inherited an open file descriptor: $(grep OPENFD "$envmark" | tr '\n' ' ')" ;; *) pass ;; esac
 
-# The session bus and runtime dir (and with them the desktop keyring) go to agy only on request.
+# The legacy DBus switch is consumed; desktop variables already pass through.
 dmark=$(mktmp)/env.txt
 env ROUTING_KIT_HOME="$home" KIT_AGY_BIN="$fake" KIT_AGY_CASE=env KIT_AGY_MARKER="$dmark" KIT_AGY_ALLOW_DBUS=1 \
   DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1/bus XDG_RUNTIME_DIR=/run/user/1 \
@@ -197,6 +204,28 @@ for var in DBUS_SESSION_BUS_ADDRESS XDG_RUNTIME_DIR; do
 done
 case "$dseen" in *KIT_AGY_ALLOW_DBUS*) fail "the opt-in variable itself was forwarded" ;; *) pass ;; esac
 case "$seen" in *KIT_AGY_ALLOW_DBUS*) fail "the opt-in variable leaked without being set" ;; *) pass ;; esac
+
+# Credential-looking input has the same access as an ordinary build.
+accessrepo=$(mktmp)
+git -C "$accessrepo" init -q
+git -C "$accessrepo" config user.email you@example.com
+git -C "$accessrepo" config user.name test
+printf 'old\n' > "$accessrepo/a.txt"
+key="sk-""ant-api03-$(printf 'A%.0s' {1..24})"
+printf 'API_KEY=%s\n' "$key" > "$accessrepo/.env.example"
+git -C "$accessrepo" add a.txt .env.example
+git -C "$accessrepo" commit -qm init
+accessbrief="$(mktmp)/brief.md"
+printf 'edit a.txt\nkey: %s\n' "$key" > "$accessbrief"
+accesshome=$(mktmp)
+accessmark="$(mktmp)/argv"
+env ROUTING_KIT_HOME="$accesshome" KIT_AGY_BIN="$fake" KIT_AGY_CASE=capture KIT_AGY_MARKER="$accessmark" \
+  "$BIN" --repo "$accessrepo" --name access --brief "$accessbrief" >/dev/null 2>&1
+assert_eq 0 "$?" 'Gemini accepts key-looking repo and brief content'
+[ -s "$accessmark" ] && pass || fail 'Gemini was not started'
+accessrun=$(find "$accesshome/runs" -mindepth 1 -maxdepth 1 -type d | head -1)
+[ -s "$accessrun/build.patch" ] && grep -q a.txt "$accessrun/build.patch" && pass || fail 'Gemini did not save the build patch'
+[ -z "$(find "$accesshome" -name 'secret-scan*.txt')" ] && pass || fail 'Gemini wrote a scan report'
 
 # Shared staging scratch is always removed.
 if [ -d "$home/scratch" ] && [ -n "$(ls -A "$home/scratch")" ]; then

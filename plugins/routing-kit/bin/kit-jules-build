@@ -21,7 +21,7 @@
 #
 # Exit: 0 verify passed · 2 bad input or dirty repo · 3 no jules on PATH /
 # not logged in · 4 provider/API error (Jules failed, needs a human, timed
-# out, or a local git stage/diff step failed) · 5 secret scan refused.
+# out, or a local git stage/diff step failed) · 5 (no longer used).
 set -uo pipefail
 
 BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
@@ -33,7 +33,6 @@ kit_require_supported
 kit_require_jq
 kit_require_python3
 . "$BIN_DIR/../lib/ledger.sh"
-. "$BIN_DIR/../lib/secret-scan.sh"
 
 REPO='' NAME='' BRIEF='' VERIFY='' TIMEOUT=2700 RESUME=''
 usage() { kit_die 2 'usage: kit-jules-build --repo DIR --name NAME --brief FILE --verify "CMD" [--timeout SECS] [--resume SESSION_ID]'; }
@@ -128,29 +127,9 @@ WT_ROOT=${KIT_JULES_WORKTREES_DIR:-$KIT_HOME/jules-worktrees}
 RUN="$RUN_ROOT/$ID" WT="$WT_ROOT/$ID"
 mkdir -p "$RUN" || kit_die 2 "could not create run dir: $RUN"
 
-# secret_scan's filename-based rules (.env*, *.pem, id_rsa*, ...) key off
-# the brief's own name. Renaming it to a fixed "brief.md" snapshot would
-# silently bypass those, so check the original path first -- before it's
-# copied anywhere.
-if ! secret_scan --credentials-only "$BRIEF" >"$RUN/secret-scan-brief-name.txt" 2>&1; then
-  cat "$RUN/secret-scan-brief-name.txt" >&2
-  kit_die 5 "secret scan found a possible secret in the brief; refusing to send to jules ($RUN/secret-scan-brief-name.txt)"
-fi
-
-# Snapshot the brief into the run dir, then scan and send that exact
-# snapshot. Scanning the original file and later re-reading it as `jules
-# new`'s stdin would leave a gap for another process to swap in
-# secret-bearing content in between.
+# Snapshot the brief into the run dir and send that exact snapshot. No secret scan: Jules has the same
+# access as Claude (owner's ruling 24/11/2026, "jules - yes").
 cp "$BRIEF" "$RUN/brief.md" || kit_die 2 "could not snapshot the brief into $RUN"
-
-# The brief snapshot is about to go to a third party (Jules, via `jules
-# new`'s stdin). Refuse rather than leak a secret pasted into it. The repo
-# itself isn't scanned here: Jules reads it from GitHub, where it already
-# lives.
-if ! secret_scan --credentials-only "$RUN/brief.md" >"$RUN/secret-scan.txt" 2>&1; then
-  cat "$RUN/secret-scan.txt" >&2
-  kit_die 5 "secret scan found a possible secret in the brief; refusing to send to jules ($RUN/secret-scan.txt)"
-fi
 
 : > "$RUN/jules-new.txt"; : > "$RUN/status.log"; : > "$RUN/patch.diff"; : > "$RUN/verify.log"
 STARTED=$(date -u +%FT%TZ); ENDED='' SESSION='' STATUS='' PATCH_LINES=0 VERIFY_EXIT=''

@@ -161,7 +161,7 @@ invoke() {
  [ "${TEST_PROFILE:-}" != pill ] || echo '{"paseo":true}' > "$home/profile.json"
  [ "${TEST_PROFILE:-}" != pill-direct ] || echo '{"paseo":true,"codex_build_transport":"direct"}' > "$home/profile.json"
  [ "${TEST_PROFILE:-}" != pill-transport ] || echo '{"paseo":false,"codex_build_transport":"paseo"}' > "$home/profile.json"
- out=$(env ROUTING_KIT_HOME="$home" ${TEST_ENV:-} "$BIN" ${TEST_TRANSPORT:---paseo} --repo "$1" --name "$2" --brief "$T/brief.md" ${TEST_OPTIONS:-} 2>&1)
+ out=$(env ROUTING_KIT_HOME="$home" ${TEST_ENV:-} "$BIN" ${TEST_TRANSPORT:---paseo} --repo "$1" --name "$2" --brief "${TEST_BRIEF:-$T/brief.md}" ${TEST_OPTIONS:-} 2>&1)
  code=$?
  run=$(find "$home/runs" -name manifest.json -print 2>/dev/null | head -1)
  run=${run%/manifest.json}
@@ -348,23 +348,29 @@ invoke "$T/repo" direct-paseo-flag
 label='--paseo overrides codex_build_transport direct'
 if [ "$code" -eq 0 ] && grep -q '^run ' "$STUB_ARGS"; then pass; else fail "$label"; fi
 unset TEST_PROFILE TEST_TRANSPORT
-# The brief is copied first; the copy is scanned and is what is sent. A secret that appears in the
-# copy (a swap between the scan and the copy, simulated by a cp that appends one) is refused.
-cpbin=$(mktmp)
-key="sk-""ant-api03-$(printf 'A%.0s' {1..24})"
-cat > "$cpbin/cp" <<CPEOF
-#!/bin/bash
-/bin/cp "\$@"; rc=\$?
-for a in "\$@"; do last="\$a"; done
-case "\$last" in */brief.md) printf 'key: %s\n' '$key' >> "\$last" ;; esac
-exit \$rc
-CPEOF
-chmod +x "$cpbin/cp"
-export TEST_ENV="PATH=$cpbin:$PATH"
-invoke "$T/repo" swapped-brief
-unset TEST_ENV
-label='a secret in the copied brief is refused (exit 5) and nothing is started'
-if [ "$code" -eq 5 ] && ! grep -q '^run ' "$STUB_ARGS" && grep -q 'brief.md:2: anthropic-key' "$home"/runs/*/secret-scan.txt 2>/dev/null; then pass; else fail "$label"; fi
+# Reintroducing scans of either input must prevent a successful Paseo build.
+for access_case in repo brief env-name; do
+  repo "$T/access-$access_case"
+  key="sk-""ant-api03-$(printf 'A%.0s' {1..24})"
+  export TEST_BRIEF="$T/access-$access_case.md"
+  printf 'create NEW.txt\n' > "$TEST_BRIEF"
+  case "$access_case" in
+    repo)
+      printf 'API_KEY=%s\n' "$key" > "$T/access-$access_case/.env.example"
+      git -C "$T/access-$access_case" add .env.example
+      git -C "$T/access-$access_case" commit -qm 'add example configuration' ;;
+    brief) printf 'key: %s\n' "$key" >> "$TEST_BRIEF" ;;
+    env-name)
+      mv "$TEST_BRIEF" "$T/.env"
+      export TEST_BRIEF="$T/.env" ;;
+  esac
+  invoke "$T/access-$access_case" "access-$access_case"
+  label="$access_case: Paseo starts and saves the build"
+  if [ "$code" -eq 0 ] && grep -q '^run ' "$STUB_ARGS" && [ -s "$run/build.patch" ] && grep -q NEW.txt "$run/build.patch"; then pass; else fail "$label"; fi
+  label="$access_case: no scan report is written"
+  check test -z "$(find "$home" -name 'secret-scan*.txt')"
+done
+unset TEST_BRIEF
 label='the manifest exit is a JSON number'
 invoke "$T/repo" exit-number
 check jq -e '.exit == 0 and (.exit | type) == "number"' "$run/manifest.json"

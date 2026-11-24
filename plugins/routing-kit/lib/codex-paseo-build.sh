@@ -497,12 +497,8 @@ codex_paseo_build() {
   paseo_head_copy=""
   [ "$export_code" -eq 0 ] || return "$export_code"
   run_claim "$run_dir"
-  # The brief is copied first, and the copy is the file that is scanned and sent: scanning the
-  # original and sending a later copy would leave a gap for another process to swap in a secret.
-  # The original's own name is checked first (secret_scan's file-name rules would never see "brief.md").
-  secret_scan --credentials-only "$BRIEF" >"$run_dir/secret-scan-brief-name.txt" 2>&1 || return 5
+  # The brief is copied and the copy is sent. Codex has the same access as Claude.
   cp "$BRIEF" "$run_dir/brief.md" || return 2
-  secret_scan --credentials-only "$run_dir/brief.md" "$run_dir/wt" >"$run_dir/secret-scan.txt" 2>&1 || return 5
   local child_var
   for child_var in $(compgen -e); do
     case "$child_var" in CLAUDE_CONFIG_DIR) ;; CLAUDE*) unset "$child_var" ;; esac

@@ -197,20 +197,17 @@ env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
   "$BIN" --repo "$src" --name secrun --brief "$d/brief.md" --verify "true" >/tmp/rk-test-jules-p1-out.$$ 2>&1
 code=$?
 rm -f /tmp/rk-test-jules-p1-out.$$
-assert_eq 5 "$code" "secret in the jules brief refuses the run"
+assert_eq 0 "$code" "a key-looking string in the brief does not stop the run (same access as Claude, 24/11)"
 
-# --- finding 4: the secret-scan refusal above still writes one ledger line.
-# Checked right here, against secrun's own $home, before any other run
-# below gets a fresh home of its own -- reusing $home for a later run would
-# make this assertion inspect that later run's ledger instead, and a real
-# regression that drops the ledger write on exit 5 would slip past it. -----
+# The run above writes exactly one ledger line, and no secret-scan file exists.
 ledger="$home/ledger.tsv"
 if [ -f "$ledger" ]; then
   lines=$(grep -c $'\tjules\t' "$ledger")
-  assert_eq 1 "$lines" "secret-scan refusal still writes exactly one ledger line"
+  assert_eq 1 "$lines" "the run writes exactly one ledger line"
 else
-  fail "ledger.tsv was not created for the secret-scan refusal"
+  fail "ledger.tsv was not created for the run"
 fi
+if find "$runs" -name 'secret-scan*' | grep -q .; then fail "no secret-scan file is written"; else pass; fi
 
 # --- P1: on a clean run, the run dir still holds a brief snapshot whose
 # content matches the original exactly -- that snapshot, not a fresh
@@ -360,11 +357,7 @@ env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" \
   "$BIN" --repo "$src" --name envrun --brief "$d/.env" --verify "true" >/tmp/rk-test-jules-env-out.$$ 2>&1
 code=$?
 rm -f /tmp/rk-test-jules-env-out.$$
-if [ "$code" -eq 5 ]; then
-  pass
-else
-  fail "a .env-named brief must be refused by the filename rule (got exit $code)"
-fi
+assert_eq 0 "$code" "a brief named .env starts the run (no filename rule any more)"
 
 # --- re-review P2: a ledger write failure (KIT_HOME can't be created) must
 # never mask the real exit code. The trap has to isolate ledger_append's
@@ -397,61 +390,12 @@ else
   pass
 fi
 
-# --- lockdown fix wave 1, item 25: a fake `cp` earlier on PATH that plants a
-# secret in the brief snapshot must be caught by the SECOND secret_scan
-# (over $RUN/brief.md), not just the first (over the original --brief
-# path). Every secret in the ORIGINAL file is already caught by the first
-# scan, so deleting the second scan would still pass a test that only ever
-# put the secret in the original -- this test puts it in the snapshot
-# instead, after the copy, so only the second scan can see it. -------------
-mk_fake_cp_bin_plants_secret() {
-  bindir=$(mktmp)
-  cat > "$bindir/cp" <<'EOF'
-#!/bin/bash
-/bin/cp "$@"
-dest=""
-for a in "$@"; do dest="$a"; done
-printf 'sk-''ant-api03-%s\n' "AAAAAAAAAAAAAAAAAAAAAAAA" >> "$dest"
-EOF
-  chmod +x "$bindir/cp"
-  echo "$bindir"
-}
-src=$(mk_src_repo)
-brief=$(mk_brief)
-cphome=$(mktmp)
-cpruns=$(mktmp); cpwts=$(mktmp)
-fakecpbin=$(mk_fake_cp_bin_plants_secret)
-fakebin=$(mk_fake_jules_bin)
-out=$(env PATH="$fakecpbin:$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$cphome" \
-  KIT_JULES_ALLOW_LOCAL_ORIGIN=1 KIT_JULES_REPO_SLUG=test/repo \
-  KIT_JULES_RUNS_DIR="$cpruns" KIT_JULES_WORKTREES_DIR="$cpwts" KIT_JULES_POLL_SECS=1 \
-  "$BIN" --repo "$src" --name cprun --brief "$brief" --verify "true" 2>&1)
-code=$?
-assert_eq 5 "$code" "a secret planted into the jules snapshot (after the original-file scan) is still caught"
-run_dir=$(find "$cpruns" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)
-if [ -n "$run_dir" ] && [ -f "$run_dir/secret-scan.txt" ] && [ -s "$run_dir/secret-scan.txt" ]; then
-  pass
-else
-  fail "the second secret scan (over the run dir's snapshot) did not run or found nothing"
-fi
-
-# --- item 25: the refusal above writes a ledger line whose exit COLUMN is
-# 5, not just some line mentioning "jules". ----------------------------------
-ledger="$cphome/ledger.tsv"
-if [ -f "$ledger" ]; then
-  ledger_line=$(grep $'\tjules\t' "$ledger")
-  ledger_exit=$(printf '%s\n' "$ledger_line" | cut -f7)
-  assert_eq 5 "$ledger_exit" "the snapshot-secret refusal's ledger line has exit column 5"
-else
-  fail "ledger.tsv was not created for the snapshot-secret refusal"
-fi
-
-# The account is trusted, so contact details pass; API keys still refuse.
+# Contact details and tokens in a brief both start the run (no scan).
 src=$(mk_src_repo); brief=$(mk_brief); home=$(mktmp); fakebin=$(mk_fake_jules_bin)
 printf 'contact someone''@example.org in /Us''ers/example/project\n' >> "$brief"
 assert_exit 0 "contact details pass Jules credential scan" -- env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$home" KIT_JULES_ALLOW_LOCAL_ORIGIN=1 KIT_JULES_REPO_SLUG=test/repo KIT_JULES_POLL_SECS=1 "$BIN" --repo "$src" --name contact --brief "$brief" --verify true
 printf 'token gh''p_abcdefgh1234\n' >> "$brief"
-assert_exit 5 "token fails Jules credential scan" -- env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$(mktmp)" KIT_JULES_ALLOW_LOCAL_ORIGIN=1 KIT_JULES_REPO_SLUG=test/repo KIT_JULES_POLL_SECS=1 "$BIN" --repo "$src" --name secret --brief "$brief" --verify true
+assert_exit 0 "a token in the brief starts the run" -- env PATH="$fakebin:/usr/bin:/bin" ROUTING_KIT_HOME="$(mktmp)" KIT_JULES_ALLOW_LOCAL_ORIGIN=1 KIT_JULES_REPO_SLUG=test/repo KIT_JULES_POLL_SECS=1 "$BIN" --repo "$src" --name secret --brief "$brief" --verify true
 
 authbin=$(mktmp); brief=$(mk_brief)
 printf '#!/bin/bash\necho "not logged in"\nexit 1\n' > "$authbin/jules"; chmod +x "$authbin/jules"

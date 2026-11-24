@@ -35,7 +35,7 @@
 # Each run first finishes earlier pending runs and archives stopped agents of finished earlier runs
 # (only agents its own manifests name, with the recorded cwd); runs under a temp dir are left alone.
 # Exit: 0 success, 2 bad input, 3 missing provider, 4 provider/cleanup error,
-# 5 secret scan refused, 6 waiting on permission (agent and copy kept), 124 timeout.
+# 6 waiting on permission (agent and copy kept), 124 timeout.
 # Every exit after the run dir exists ends with `kit-codex-build: exit=N patch=PATH result=PATH`
 # (patch= is empty when there is none).
 set -uo pipefail
@@ -45,12 +45,11 @@ BIN_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 kit_require_supported
 # Fail fast (exit 3, install hint) if jq/python3 are missing, before any
 # `x=$(kit_jq ...)` below that could otherwise mask the real problem behind
-# a generic "invalid models file" or a false secret-scan refusal.
+# a generic "invalid models file".
 kit_require_jq
 kit_require_python3
 . "$BIN_DIR/../lib/export.sh"
 . "$BIN_DIR/../lib/ledger.sh"
-. "$BIN_DIR/../lib/secret-scan.sh"
 
 MODELS_FILE="$BIN_DIR/../rules/models.json"
 REPO="" NAME="" BRIEF="" MODEL=""
@@ -126,7 +125,7 @@ esac
 
 # From here on, every exit writes exactly one ledger line -- success or
 # any failure -- through this single trap, so no exit path (a preflight
-# kit_die, a secret-scan refusal, a provider error) can skip it. The
+# kit_die or a provider error) can skip it. The
 # ledger_append call runs in a subshell: ledger_append itself calls
 # kit_die (i.e. exit) if it can't create $KIT_HOME, and without the
 # subshell that exit would overwrite the status this trap is supposed to
@@ -242,29 +241,11 @@ run_claim "$run_dir"
 rm -rf "$run_dir/git.pristine" || kit_die 4 'could not remove saved git directory'
 [ ! -e "$run_dir/git.pristine" ] || kit_die 4 'saved git directory remains'
 
-# secret_scan's filename-based rules (.env*, *.pem, id_rsa*, ...) key off
-# the brief's own name. Renaming it to a fixed "brief.md" snapshot would
-# silently bypass those, so check the original path first -- before it's
-# copied anywhere.
-if ! secret_scan --credentials-only "$BRIEF" >"$run_dir/secret-scan-brief-name.txt" 2>&1; then
-  cat "$run_dir/secret-scan-brief-name.txt" >&2
-  kit_die 5 "secret scan found a possible secret in the brief; refusing to send to codex ($run_dir/secret-scan-brief-name.txt)"
-fi
-
-# Snapshot the brief into the run dir, then scan and send that exact
-# snapshot. Scanning the original file and later re-reading it for `codex
-# exec` would leave a gap for another process to swap in secret-bearing
-# content in between.
+# Snapshot the brief into the run dir and send that exact snapshot. Codex has the same
+# access as Claude (owner's ruling 16/11 and 23/11/2026: "Codex and Gemini agents have the same permissions
+# as Claude").
 brief_snapshot="$run_dir/brief.md"
 cp "$BRIEF" "$brief_snapshot" || kit_die 2 "could not snapshot the brief into $run_dir"
-
-# The exported tree and the brief snapshot are about to go to a third
-# party (Codex). Refuse rather than leak a secret that happens to be
-# checked into the repo or pasted into the brief.
-if ! secret_scan --credentials-only "$wt" "$brief_snapshot" >"$run_dir/secret-scan.txt" 2>&1; then
-  cat "$run_dir/secret-scan.txt" >&2
-  kit_die 5 "secret scan found a possible secret; refusing to send to codex ($run_dir/secret-scan.txt)"
-fi
 
 # Codex runs without a sandbox or approval prompts for unattended builds.
 #

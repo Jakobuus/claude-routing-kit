@@ -10,7 +10,9 @@ description: Build handoffs. Use before you start a build with another model (ki
 - Commit first. Builds work on a copy of your committed files; the commands refuse a dirty repo.
 - Write the brief to a file: the goal, the exact files, the facts the worker needs, and the tests
   that show it is done. Ask for one run against the real data or system before finishing.
-- The worker sees only the repo and the brief. Paste in anything it needs from outside the repo.
+- Codex and Gemini have the same access as Claude. Gemini inherits exported variables except
+  the caller's Claude session variables; `CLAUDE_CONFIG_DIR` stays and `KIT_ROLE=worker`.
+  Kimi, GLM and Jules see only the supplied repo and brief.
 - Never put credentials or private details of people into a brief.
 - Parallel builds only on files that don't overlap.
 - Work that needs a signed-in account, private data, files git ignores or a live server stays in
@@ -28,8 +30,8 @@ locked-build --provider kimi|glm --repo DIR --name NAME --brief FILE     # Kimi 
 ```
 
 Run them in the background; each prints the path of its result when it ends. Exit codes: 0 done,
-2 bad input or dirty repo, 3 a tool or login is missing, 4 build or provider error, 5 a secret scan
-or the sandbox check refused, 6 (Codex through Paseo) the agent waits for a permission, 124 timeout.
+2 bad input or dirty repo, 3 a tool or login is missing, 4 build or provider error,
+5 (locked-build only: Kimi, GLM) a secret scan or sandbox check refused, 6 (Codex through Paseo) the agent waits for a permission, 124 timeout.
 For 3, restore the missing tool or login; for 5, resolve the scan or sandbox refusal rather
 than bypassing it; for 6, ask the user for the required permission. Resume only once resolved.
 
